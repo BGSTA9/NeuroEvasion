@@ -1468,5 +1468,771 @@ class DQNAgent:
 
 ---
 
-*Continued in Phase 4…*
-]]>
+## Phase 4 — Training & Co-Evolution
+
+> **What we're building:** The training orchestrator that runs both agents against each other for hundreds of thousands of episodes, logging metrics and saving checkpoints.
+
+### Step 4.1 — Metrics Logger
+
+Create `training/logger.py`:
+
+```python
+"""
+training/logger.py — Training metrics logging.
+
+Logs to both TensorBoard (interactive graphs) and CSV (raw data).
+TensorBoard lets you monitor training in real-time with:
+    tensorboard --logdir logs/
+"""
+
+import os
+import csv
+from datetime import datetime
+from torch.utils.tensorboard import SummaryWriter
+
+
+class TrainingLogger:
+    """
+    Dual logger: TensorBoard + CSV file.
+    
+    Usage:
+        logger = TrainingLogger("logs/run_001")
+        logger.log_episode(episode=100, snake_reward=5.2, ...)
+        logger.close()
+    """
+    
+    def __init__(self, log_dir: str):
+        os.makedirs(log_dir, exist_ok=True)
+        self.writer = SummaryWriter(log_dir)
+        
+        csv_path = os.path.join(log_dir, "metrics.csv")
+        self.csv_file = open(csv_path, "w", newline="")
+        self.csv_writer = csv.writer(self.csv_file)
+        self.csv_writer.writerow([
+            "episode", "snake_reward", "bait_reward", "snake_loss",
+            "bait_loss", "winner", "steps", "epsilon", "timestamp"
+        ])
+    
+    def log_episode(self, episode: int, snake_reward: float, bait_reward: float,
+                    snake_loss: float, bait_loss: float, winner: str,
+                    steps: int, epsilon: float) -> None:
+        """Log metrics for a completed episode."""
+        # TensorBoard
+        self.writer.add_scalar("Reward/Snake", snake_reward, episode)
+        self.writer.add_scalar("Reward/Bait", bait_reward, episode)
+        self.writer.add_scalar("Loss/Snake", snake_loss, episode)
+        self.writer.add_scalar("Loss/Bait", bait_loss, episode)
+        self.writer.add_scalar("Episode/Steps", steps, episode)
+        self.writer.add_scalar("Episode/Epsilon", epsilon, episode)
+        
+        snake_win = 1.0 if winner == "snake" else 0.0
+        self.writer.add_scalar("WinRate/Snake", snake_win, episode)
+        
+        # CSV
+        self.csv_writer.writerow([
+            episode, f"{snake_reward:.4f}", f"{bait_reward:.4f}",
+            f"{snake_loss:.6f}", f"{bait_loss:.6f}",
+            winner, steps, f"{epsilon:.4f}", datetime.now().isoformat()
+        ])
+    
+    def log_evaluation(self, episode: int, snake_win_rate: float,
+                       avg_survival: float) -> None:
+        """Log evaluation round metrics."""
+        self.writer.add_scalar("Eval/SnakeWinRate", snake_win_rate, episode)
+        self.writer.add_scalar("Eval/AvgSurvivalSteps", avg_survival, episode)
+    
+    def close(self) -> None:
+        self.writer.close()
+        self.csv_file.close()
+```
+
+### Step 4.2 — The Training Orchestrator
+
+Create `training/trainer.py`:
+
+```python
+"""
+training/trainer.py — Main training loop for co-evolutionary learning.
+
+THE CO-EVOLUTION PROCESS:
+    1. Both agents start with random policies (high ε)
+    2. They play thousands of games against each other
+    3. Each agent improves against the CURRENT version of the other
+    4. As one gets better, it forces the other to adapt
+    5. This creates an arms race of increasingly sophisticated strategies
+
+EMERGENT BEHAVIORS YOU MAY OBSERVE:
+    - Snake learns to "corner" the bait against walls
+    - Bait learns to run along walls to maximize escape routes
+    - Snake learns to "cut off" the bait's escape paths
+    - Bait learns to fake one direction then go another
+"""
+
+import os
+import time
+import numpy as np
+from config import Config
+from environment.env import NeuroEvasionEnv
+from agents.dqn_agent import DQNAgent
+from training.logger import TrainingLogger
+from utils import set_global_seed
+
+
+def train(config: Config) -> None:
+    """
+    Main training function.
+    
+    Creates the environment and both agents, then runs the
+    co-evolutionary training loop.
+    """
+    # --- Setup ---
+    set_global_seed(config.seed)
+    
+    env = NeuroEvasionEnv(config)
+    
+    in_channels = env.obs_channels
+    grid_size = config.game.grid_size
+    
+    snake_agent = DQNAgent(
+        in_channels=in_channels,
+        grid_size=grid_size,
+        num_actions=env.snake_num_actions,
+        config=config.agent,
+        device=config.training.device,
+    )
+    
+    bait_agent = DQNAgent(
+        in_channels=in_channels,
+        grid_size=grid_size,
+        num_actions=env.bait_num_actions,
+        config=config.agent,
+        device=config.training.device,
+    )
+    
+    logger = TrainingLogger(f"logs/run_{int(time.time())}")
+    
+    print(f"Starting training for {config.training.num_episodes} episodes...")
+    print(f"Grid: {grid_size}×{grid_size} | Device: {config.training.device}")
+    print(f"Snake actions: {env.snake_num_actions} | Bait actions: {env.bait_num_actions}")
+    print("-" * 60)
+    
+    # --- Tracking ---
+    episode_rewards_snake = []
+    episode_rewards_bait = []
+    snake_wins = 0
+    total_games = 0
+    
+    # --- Training Loop ---
+    for episode in range(1, config.training.num_episodes + 1):
+        snake_obs, bait_obs = env.reset()
+        
+        ep_snake_reward = 0.0
+        ep_bait_reward = 0.0
+        ep_snake_loss = 0.0
+        ep_bait_loss = 0.0
+        loss_count = 0
+        
+        for step in range(config.game.max_steps):
+            # Both agents select actions
+            snake_action = snake_agent.select_action(snake_obs)
+            bait_action = bait_agent.select_action(bait_obs)
+            
+            # Environment step
+            (snake_obs_next, bait_obs_next,
+             snake_reward, bait_reward, done, info) = env.step(snake_action, bait_action)
+            
+            # Store experiences
+            snake_agent.store_transition(
+                snake_obs, snake_action, snake_reward, snake_obs_next, done)
+            bait_agent.store_transition(
+                bait_obs, bait_action, bait_reward, bait_obs_next, done)
+            
+            # Train both agents
+            s_loss = snake_agent.train_step()
+            b_loss = bait_agent.train_step()
+            
+            if s_loss is not None:
+                ep_snake_loss += s_loss
+                ep_bait_loss += b_loss if b_loss else 0
+                loss_count += 1
+            
+            ep_snake_reward += snake_reward
+            ep_bait_reward += bait_reward
+            
+            snake_obs = snake_obs_next
+            bait_obs = bait_obs_next
+            
+            if done:
+                break
+        
+        # --- Post-Episode ---
+        total_games += 1
+        if info.get("event") == "capture":
+            snake_wins += 1
+        
+        avg_s_loss = ep_snake_loss / max(loss_count, 1)
+        avg_b_loss = ep_bait_loss / max(loss_count, 1)
+        
+        # Sync target networks periodically
+        if episode % config.agent.target_sync_interval == 0:
+            snake_agent.sync_target_network()
+            bait_agent.sync_target_network()
+        
+        # Log metrics
+        logger.log_episode(
+            episode=episode,
+            snake_reward=ep_snake_reward,
+            bait_reward=ep_bait_reward,
+            snake_loss=avg_s_loss,
+            bait_loss=avg_b_loss,
+            winner=info.get("event", "unknown"),
+            steps=step + 1,
+            epsilon=snake_agent.epsilon,
+        )
+        
+        # Print progress
+        if episode % config.training.log_interval == 0:
+            win_rate = snake_wins / total_games * 100
+            print(
+                f"Ep {episode:>7d} | "
+                f"ε={snake_agent.epsilon:.3f} | "
+                f"Snake R={ep_snake_reward:>7.2f} | "
+                f"Bait R={ep_bait_reward:>7.2f} | "
+                f"Win%={win_rate:.1f}% | "
+                f"Steps={step+1:>3d}"
+            )
+            # Reset rolling counters
+            snake_wins = 0
+            total_games = 0
+        
+        # Save checkpoints
+        if episode % config.training.checkpoint_interval == 0:
+            snake_agent.save(f"checkpoints/snake_ep{episode}.pt")
+            bait_agent.save(f"checkpoints/bait_ep{episode}.pt")
+            print(f"  💾 Checkpoints saved at episode {episode}")
+    
+    # --- Final Save ---
+    snake_agent.save("checkpoints/snake_final.pt")
+    bait_agent.save("checkpoints/bait_final.pt")
+    logger.close()
+    print("\n✅ Training complete!")
+```
+
+### Step 4.3 — CLI Entry Point
+
+Create `main.py`:
+
+```python
+"""
+main.py — Command-line entry point for NeuroEvasion.
+
+Usage:
+    python main.py train                    # Train agents
+    python main.py train --episodes 10000   # Custom episode count
+    python main.py demo                     # Watch trained agents play
+    python main.py evaluate                 # Evaluate model performance
+"""
+
+import argparse
+import sys
+from config import Config
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="NeuroEvasion — Co-Evolutionary Pursuit-Evasion with DNN",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    
+    # --- Train command ---
+    train_parser = subparsers.add_parser("train", help="Train the agents")
+    train_parser.add_argument("--episodes", type=int, default=None,
+                              help="Number of training episodes")
+    train_parser.add_argument("--grid-size", type=int, default=None,
+                              help="Grid size (N×N)")
+    train_parser.add_argument("--lr", type=float, default=None,
+                              help="Learning rate")
+    train_parser.add_argument("--device", type=str, default=None,
+                              choices=["cpu", "cuda"],
+                              help="Training device")
+    train_parser.add_argument("--seed", type=int, default=None,
+                              help="Random seed")
+    
+    # --- Demo command ---
+    demo_parser = subparsers.add_parser("demo", help="Watch agents play")
+    demo_parser.add_argument("--snake-model", type=str, required=True,
+                             help="Path to snake checkpoint")
+    demo_parser.add_argument("--bait-model", type=str, required=True,
+                             help="Path to bait checkpoint")
+    demo_parser.add_argument("--speed", type=int, default=10,
+                             help="Game speed (FPS)")
+    
+    # --- Evaluate command ---
+    eval_parser = subparsers.add_parser("evaluate", help="Evaluate agents")
+    eval_parser.add_argument("--snake-model", type=str, required=True)
+    eval_parser.add_argument("--bait-model", type=str, required=True)
+    eval_parser.add_argument("--num-games", type=int, default=1000)
+    
+    args = parser.parse_args()
+    
+    if args.command is None:
+        parser.print_help()
+        sys.exit(1)
+    
+    config = Config()
+    
+    if args.command == "train":
+        if args.episodes:
+            config.training.num_episodes = args.episodes
+        if args.grid_size:
+            config.game.grid_size = args.grid_size
+        if args.lr:
+            config.agent.learning_rate = args.lr
+        if args.device:
+            config.training.device = args.device
+        if args.seed:
+            config.seed = args.seed
+        
+        from training.trainer import train
+        train(config)
+    
+    elif args.command == "demo":
+        from visualization.renderer import run_demo
+        run_demo(config, args.snake_model, args.bait_model, args.speed)
+    
+    elif args.command == "evaluate":
+        from evaluation.evaluator import evaluate
+        evaluate(config, args.snake_model, args.bait_model, args.num_games)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
+## Phase 5 — Visualization & Evaluation
+
+> **What we're building:** A Pygame renderer to watch trained agents play in real-time, an evaluator to measure agent performance, and plotting utilities for training analysis.
+
+### Step 5.1 — Pygame Renderer
+
+Create `visualization/renderer.py`:
+
+```python
+"""
+visualization/renderer.py — Real-time game visualization with Pygame.
+
+This renders the game grid with color-coded entities and a HUD
+showing episode stats. Used in 'demo' mode to watch trained agents.
+
+DESIGN:
+    - Dark background with neon-style colors for a modern look
+    - Snake rendered as a gradient from bright to dark green
+    - Bait pulses with a glow effect
+    - HUD shows real-time Q-values and scores
+"""
+
+import pygame
+import numpy as np
+import sys
+import math
+from config import Config
+from environment.env import NeuroEvasionEnv
+from agents.dqn_agent import DQNAgent
+
+# --- Color Palette ---
+BLACK = (10, 10, 15)
+DARK_GRAY = (25, 25, 35)
+WALL_COLOR = (40, 45, 60)
+GRID_LINE = (30, 30, 40)
+SNAKE_HEAD = (0, 255, 120)
+SNAKE_BODY = (0, 180, 80)
+SNAKE_TAIL = (0, 100, 50)
+BAIT_COLOR = (255, 60, 80)
+BAIT_GLOW = (255, 100, 120)
+TEXT_COLOR = (200, 210, 230)
+HIGHLIGHT = (100, 200, 255)
+
+
+class GameRenderer:
+    """Renders the NeuroEvasion game with Pygame."""
+    
+    def __init__(self, grid_size: int, cell_size: int = 30):
+        self.grid_size = grid_size
+        self.cell_size = cell_size
+        self.hud_width = 280
+        self.width = grid_size * cell_size + self.hud_width
+        self.height = grid_size * cell_size
+        
+        pygame.init()
+        pygame.display.set_caption("🧠 NeuroEvasion — Pursuit-Evasion AI")
+        self.screen = pygame.display.set_mode((self.width, self.height))
+        self.clock = pygame.time.Clock()
+        self.font = pygame.font.SysFont("monospace", 16)
+        self.font_large = pygame.font.SysFont("monospace", 22, bold=True)
+        self.frame_count = 0
+    
+    def render(self, state: dict, info: dict = None) -> None:
+        """Draw the current game state."""
+        self.screen.fill(BLACK)
+        self.frame_count += 1
+        
+        # Draw grid lines
+        for i in range(self.grid_size + 1):
+            x = i * self.cell_size
+            pygame.draw.line(self.screen, GRID_LINE, (x, 0), (x, self.height), 1)
+            pygame.draw.line(self.screen, GRID_LINE, (0, x), (self.grid_size * self.cell_size, x), 1)
+        
+        grid = state["grid"]
+        snake_body = state.get("snake_body", [])
+        bait_pos = state.get("bait_pos")
+        
+        # Draw walls
+        for r in range(self.grid_size):
+            for c in range(self.grid_size):
+                if grid[r, c] == 1:  # WALL
+                    rect = pygame.Rect(c * self.cell_size, r * self.cell_size,
+                                       self.cell_size, self.cell_size)
+                    pygame.draw.rect(self.screen, WALL_COLOR, rect)
+        
+        # Draw snake body with gradient
+        if snake_body:
+            for i, (r, c) in enumerate(snake_body):
+                ratio = i / max(len(snake_body) - 1, 1)
+                color = self._lerp_color(SNAKE_HEAD, SNAKE_TAIL, ratio)
+                rect = pygame.Rect(c * self.cell_size + 1, r * self.cell_size + 1,
+                                   self.cell_size - 2, self.cell_size - 2)
+                pygame.draw.rect(self.screen, color, rect, border_radius=4)
+            
+            # Snake head highlight
+            hr, hc = snake_body[0]
+            rect = pygame.Rect(hc * self.cell_size + 1, hr * self.cell_size + 1,
+                               self.cell_size - 2, self.cell_size - 2)
+            pygame.draw.rect(self.screen, SNAKE_HEAD, rect, border_radius=6)
+        
+        # Draw bait with pulse effect
+        if bait_pos:
+            br, bc = bait_pos
+            pulse = abs(math.sin(self.frame_count * 0.1)) * 4
+            cx = bc * self.cell_size + self.cell_size // 2
+            cy = br * self.cell_size + self.cell_size // 2
+            radius = self.cell_size // 2 - 2 + int(pulse)
+            
+            # Glow effect
+            glow_surf = pygame.Surface((radius * 4, radius * 4), pygame.SRCALPHA)
+            pygame.draw.circle(glow_surf, (*BAIT_GLOW, 40), (radius * 2, radius * 2), radius * 2)
+            self.screen.blit(glow_surf, (cx - radius * 2, cy - radius * 2))
+            
+            # Core
+            pygame.draw.circle(self.screen, BAIT_COLOR, (cx, cy), radius - 2)
+        
+        # Draw HUD
+        self._draw_hud(state, info)
+        
+        pygame.display.flip()
+    
+    def _draw_hud(self, state: dict, info: dict) -> None:
+        """Draw the heads-up display panel."""
+        hud_x = self.grid_size * self.cell_size + 10
+        
+        # Panel background
+        panel_rect = pygame.Rect(self.grid_size * self.cell_size, 0,
+                                  self.hud_width, self.height)
+        pygame.draw.rect(self.screen, DARK_GRAY, panel_rect)
+        
+        # Title
+        title = self.font_large.render("NeuroEvasion", True, HIGHLIGHT)
+        self.screen.blit(title, (hud_x, 15))
+        
+        y = 55
+        lines = [
+            f"Step: {state.get('step', 0)}",
+            f"Done: {state.get('done', False)}",
+            f"Winner: {state.get('winner', '-')}",
+            "",
+            f"Snake len: {len(state.get('snake_body', []))}",
+        ]
+        
+        if info:
+            lines.extend([
+                f"Distance: {info.get('distance', '?')}",
+                f"Event: {info.get('event', 'step')}",
+            ])
+        
+        for line in lines:
+            if line:
+                surf = self.font.render(line, True, TEXT_COLOR)
+                self.screen.blit(surf, (hud_x, y))
+            y += 22
+    
+    def _lerp_color(self, c1, c2, t):
+        """Linear interpolation between two colors."""
+        return tuple(int(a + (b - a) * t) for a, b in zip(c1, c2))
+    
+    def handle_events(self) -> str:
+        """Handle Pygame events. Returns 'quit', 'pause', or 'continue'."""
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return "quit"
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_q or event.key == pygame.K_ESCAPE:
+                    return "quit"
+                if event.key == pygame.K_p:
+                    return "pause"
+                if event.key == pygame.K_r:
+                    return "restart"
+        return "continue"
+    
+    def close(self) -> None:
+        pygame.quit()
+
+
+def run_demo(config: Config, snake_model_path: str, 
+             bait_model_path: str, speed: int = 10) -> None:
+    """Run a visual demo with trained agents."""
+    env = NeuroEvasionEnv(config)
+    renderer = GameRenderer(config.game.grid_size)
+    
+    in_channels = env.obs_channels
+    grid_size = config.game.grid_size
+    
+    snake_agent = DQNAgent(in_channels, grid_size, env.snake_num_actions,
+                           config.agent, device="cpu")
+    bait_agent = DQNAgent(in_channels, grid_size, env.bait_num_actions,
+                          config.agent, device="cpu")
+    
+    snake_agent.load(snake_model_path)
+    bait_agent.load(bait_model_path)
+    
+    # Set to pure exploitation (no random actions)
+    snake_agent.epsilon = 0.0
+    bait_agent.epsilon = 0.0
+    
+    print("🎮 Demo mode — Press Q to quit, P to pause, R to restart")
+    
+    while True:
+        snake_obs, bait_obs = env.reset()
+        done = False
+        
+        while not done:
+            event = renderer.handle_events()
+            if event == "quit":
+                renderer.close()
+                return
+            if event == "restart":
+                break
+            if event == "pause":
+                while renderer.handle_events() != "pause":
+                    renderer.clock.tick(10)
+            
+            snake_action = snake_agent.select_action(snake_obs)
+            bait_action = bait_agent.select_action(bait_obs)
+            
+            snake_obs, bait_obs, _, _, done, info = env.step(snake_action, bait_action)
+            
+            state = env.engine.get_state()
+            renderer.render(state, info)
+            renderer.clock.tick(speed)
+    
+    renderer.close()
+```
+
+### Step 5.2 — Evaluator
+
+Create `evaluation/evaluator.py`:
+
+```python
+"""
+evaluation/evaluator.py — Evaluate trained agents over many games.
+
+Computes key performance metrics without rendering, for fast evaluation.
+"""
+
+import numpy as np
+from config import Config
+from environment.env import NeuroEvasionEnv
+from agents.dqn_agent import DQNAgent
+
+
+def evaluate(config: Config, snake_model_path: str, 
+             bait_model_path: str, num_games: int = 1000) -> dict:
+    """
+    Run evaluation games and compute statistics.
+    
+    Returns:
+        dict with snake_win_rate, avg_survival, avg_snake_reward, etc.
+    """
+    env = NeuroEvasionEnv(config)
+    in_channels = env.obs_channels
+    grid_size = config.game.grid_size
+    
+    snake_agent = DQNAgent(in_channels, grid_size, env.snake_num_actions,
+                           config.agent, device="cpu")
+    bait_agent = DQNAgent(in_channels, grid_size, env.bait_num_actions,
+                          config.agent, device="cpu")
+    
+    snake_agent.load(snake_model_path)
+    bait_agent.load(bait_model_path)
+    snake_agent.epsilon = 0.0
+    bait_agent.epsilon = 0.0
+    
+    snake_wins = 0
+    survival_steps = []
+    snake_rewards = []
+    bait_rewards = []
+    
+    for game in range(num_games):
+        snake_obs, bait_obs = env.reset()
+        ep_snake_r = 0.0
+        ep_bait_r = 0.0
+        done = False
+        steps = 0
+        
+        while not done:
+            s_action = snake_agent.select_action(snake_obs)
+            b_action = bait_agent.select_action(bait_obs)
+            snake_obs, bait_obs, s_r, b_r, done, info = env.step(s_action, b_action)
+            ep_snake_r += s_r
+            ep_bait_r += b_r
+            steps += 1
+        
+        if info.get("event") == "capture":
+            snake_wins += 1
+        
+        survival_steps.append(steps)
+        snake_rewards.append(ep_snake_r)
+        bait_rewards.append(ep_bait_r)
+        
+        if (game + 1) % 100 == 0:
+            print(f"  Evaluated {game + 1}/{num_games} games...")
+    
+    results = {
+        "snake_win_rate": snake_wins / num_games,
+        "bait_win_rate": 1 - snake_wins / num_games,
+        "avg_survival_steps": np.mean(survival_steps),
+        "median_survival_steps": np.median(survival_steps),
+        "avg_snake_reward": np.mean(snake_rewards),
+        "avg_bait_reward": np.mean(bait_rewards),
+        "total_games": num_games,
+    }
+    
+    print("\n" + "=" * 50)
+    print("📊 EVALUATION RESULTS")
+    print("=" * 50)
+    print(f"  Games played:          {num_games}")
+    print(f"  Snake win rate:        {results['snake_win_rate']:.1%}")
+    print(f"  Bait win rate:         {results['bait_win_rate']:.1%}")
+    print(f"  Avg survival (steps):  {results['avg_survival_steps']:.1f}")
+    print(f"  Avg snake reward:      {results['avg_snake_reward']:.2f}")
+    print(f"  Avg bait reward:       {results['avg_bait_reward']:.2f}")
+    print("=" * 50)
+    
+    return results
+```
+
+---
+
+## Quick-Start Guide
+
+### 1. Install & Setup
+
+```bash
+git clone https://github.com/YOUR_USERNAME/NeuroEvasion.git
+cd NeuroEvasion
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 2. Train (Short Run)
+
+```bash
+# Quick smoke test: 1,000 episodes (~2 minutes)
+python main.py train --episodes 1000
+
+# Full training: 500,000 episodes (several hours)
+python main.py train
+
+# With GPU
+python main.py train --device cuda
+```
+
+### 3. Monitor Training
+
+```bash
+# In a separate terminal:
+tensorboard --logdir logs/
+# Open http://localhost:6006 in your browser
+```
+
+### 4. Watch Demo
+
+```bash
+python main.py demo \
+  --snake-model checkpoints/snake_final.pt \
+  --bait-model checkpoints/bait_final.pt \
+  --speed 8
+```
+
+### 5. Evaluate
+
+```bash
+python main.py evaluate \
+  --snake-model checkpoints/snake_final.pt \
+  --bait-model checkpoints/bait_final.pt \
+  --num-games 1000
+```
+
+---
+
+## Concepts Cheat Sheet for Students
+
+| Concept | Where in Code | What It Does |
+|---------|---------------|-------------|
+| **CNN** | `agents/networks.py` | Extracts spatial features from grid observation |
+| **Q-Learning** | `agents/dqn_agent.py` → `train_step()` | Updates Q-values toward TD targets |
+| **Experience Replay** | `agents/replay_buffer.py` | Breaks temporal correlation in training data |
+| **Target Network** | `agents/dqn_agent.py` → `sync_target_network()` | Stabilizes training with a frozen reference |
+| **ε-Greedy** | `agents/dqn_agent.py` → `select_action()` | Balances exploration vs. exploitation |
+| **Reward Shaping** | `game/engine.py` → `step()` | Guides learning with distance-based rewards |
+| **Zero-Sum Game** | `config.py` → `RewardConfig` | Snake reward = −Bait reward |
+| **Co-Evolution** | `training/trainer.py` | Both agents improve against each other |
+| **Frame Stacking** | `environment/frame_stacker.py` | Gives the CNN a sense of motion/velocity |
+| **Discount Factor (γ)** | `config.py` → `AgentConfig.gamma` | How much future rewards matter vs. immediate |
+
+---
+
+## Suggested Exercises for Students
+
+1. **Modify the reward function** — What happens if you remove distance shaping and only keep terminal rewards? Does learning still converge?
+
+2. **Change the grid size** — Try 10×10 (easier) and 30×30 (harder). How does this affect training time and strategy complexity?
+
+3. **Give the bait a speed advantage** — Set `bait_move_every=1` and give bait 2 moves per snake move. Can the snake still learn to catch it?
+
+4. **Implement Double DQN** — Use the policy network to SELECT the best next action, but the target network to EVALUATE it. Does this reduce Q-value overestimation?
+
+5. **Add obstacles** — Place random walls inside the arena. How do the agents' strategies adapt?
+
+6. **Visualize Q-values** — Render a heatmap of Q-values across the grid. Where does the snake think it's "winning"?
+
+7. **Asymmetric information** — What if the bait can only see a 5×5 area around itself (limited vision)? How does this change the game dynamics?
+
+---
+
+## Recommended Reading
+
+| Topic | Paper/Resource |
+|-------|---------------|
+| DQN | Mnih et al., "Playing Atari with Deep RL" (2013) |
+| Target Networks | Mnih et al., "Human-level control through deep RL" (2015) |
+| Dueling DQN | Wang et al., "Dueling Network Architectures" (2016) |
+| Multi-Agent RL | Lowe et al., "Multi-Agent Actor-Critic" (2017) |
+| Self-Play | Silver et al., "Mastering Go without Human Knowledge" (2017) |
+| Reward Shaping | Ng et al., "Policy Invariance Under Reward Transformations" (1999) |
+
+---
+
+> **🎓 End of Tutorial.** You now have a complete understanding of every component in the NeuroEvasion system. Build each phase incrementally, test thoroughly, and watch your agents evolve!

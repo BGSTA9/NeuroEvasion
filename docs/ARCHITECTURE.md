@@ -39,12 +39,12 @@ The result is a system where the **Snake** (pursuer) learns to predict and inter
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    NeuroEvasion System                       │
+│                    NeuroEvasion System                      │
 │                                                             │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐   │
-│  │  Game Engine  │◄──►│  Environment │◄──►│  Renderer    │   │
-│  │  (Core Loop)  │    │  (Gym-like)  │    │  (Pygame)    │   │
-│  └──────┬───────┘    └──────┬───────┘    └──────────────┘   │
+│  ┌──────────────┐     ┌──────────────┐    ┌──────────────┐  │
+│  │  Game Engine │ ◄──►│  Environment │◄──►│  Renderer    │  │
+│  │  (Core Loop) │     │  (Gym-like)  │    │  (Pygame)    │  │
+│  └──────┬───────┘     └──────┬───────┘    └──────────────┘  │
 │         │                   │                               │
 │         ▼                   ▼                               │
 │  ┌──────────────────────────────────────┐                   │
