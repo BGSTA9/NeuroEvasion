@@ -1,0 +1,189 @@
+"""
+agents/dqn_agent.py — The DQN agent that learns to play.
+
+This class ties everything together:
+    - Uses the DQN network to estimate Q-values
+    - Selects actions via ε-greedy exploration
+    - Stores experiences in the replay buffer
+    - Trains the network using TD-learning
+    - Maintains a target network for stable training
+
+THE TRAINING ALGORITHM (pseudocode):
+    1. Observe state s
+    2. With probability ε: random action, else: argmax Q(s, a)
+    3. Execute action, observe reward r and next state s'
+    4. Store (s, a, r, s', done) in replay buffer
+    5. Sample random batch from buffer
+    6. Compute target: y = r + γ × max Q_target(s', a')
+    7. Compute loss: L = (Q(s, a) - y)²
+    8. Backpropagate and update weights
+    9. Periodically copy weights to target network
+"""
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import numpy as np
+import os
+from agents.networks import DQNNetwork, DuelingDQN
+from agents.replay_buffer import ReplayBuffer
+
+
+class DQNAgent:
+    """
+    Deep Q-Network agent with experience replay and target network.
+
+    Args:
+        in_channels: observation channels (frame_stack × 4)
+        grid_size: grid height/width
+        num_actions: number of available actions
+        config: AgentConfig dataclass
+        device: 'cpu' or 'cuda'
+        use_dueling: if True, use Dueling DQN architecture
+    """
+
+    def __init__(self, in_channels: int, grid_size: int, num_actions: int,
+                 config, device: str = "cpu", use_dueling: bool = False):
+        self.config = config
+        self.device = torch.device(device)
+        self.num_actions = num_actions
+        self.steps_done = 0
+
+        # --- Networks ---
+        NetworkClass = DuelingDQN if use_dueling else DQNNetwork
+
+        self.policy_net = NetworkClass(in_channels, grid_size, num_actions).to(self.device)
+        self.target_net = NetworkClass(in_channels, grid_size, num_actions).to(self.device)
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+        self.target_net.eval()  # Target net is never trained directly
+
+        # --- Optimizer ---
+        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=config.learning_rate)
+
+        # --- Replay Buffer ---
+        self.memory = ReplayBuffer(capacity=config.replay_buffer_size)
+
+        # --- Exploration ---
+        self.epsilon = config.epsilon_start
+        self.epsilon_start = config.epsilon_start
+        self.epsilon_end = config.epsilon_end
+        self.epsilon_decay_steps = config.epsilon_decay_steps
+
+    def select_action(self, state: np.ndarray) -> int:
+        """
+        ε-greedy action selection.
+
+        With probability ε: explore (random action)
+        With probability 1-ε: exploit (best Q-value action)
+
+        WHY ε-GREEDY?
+            Early in training, the network's Q-values are random noise.
+            We need exploration to discover which actions lead to rewards.
+            As training progresses, we trust the network more (lower ε).
+        """
+        self.steps_done += 1
+        self._update_epsilon()
+
+        if np.random.random() < self.epsilon:
+            # Explore: choose a random action
+            return np.random.randint(self.num_actions)
+        else:
+            # Exploit: choose the action with highest Q-value
+            with torch.no_grad():
+                state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+                q_values = self.policy_net(state_tensor)
+                return q_values.argmax(dim=1).item()
+
+    def _update_epsilon(self) -> None:
+        """Linearly decay ε from start to end over decay_steps."""
+        progress = min(1.0, self.steps_done / self.epsilon_decay_steps)
+        self.epsilon = self.epsilon_start + progress * (self.epsilon_end - self.epsilon_start)
+
+    def store_transition(self, state, action, reward, next_state, done) -> None:
+        """Save an experience to replay memory."""
+        self.memory.push(state, action, reward, next_state, done)
+
+    def train_step(self) -> float | None:
+        """
+        Perform one training step (sample batch + gradient update).
+
+        THE CORE DQN UPDATE:
+            target = reward + γ × max_a' Q_target(next_state, a')
+            loss = MSE(Q_policy(state, action), target)
+
+        Returns:
+            loss value (float) or None if buffer isn't ready
+        """
+        if not self.memory.is_ready(self.config.batch_size):
+            return None
+
+        batch = self.memory.sample(self.config.batch_size)
+
+        # Convert to tensors
+        states = torch.FloatTensor(batch['states']).to(self.device)
+        actions = torch.LongTensor(batch['actions']).to(self.device)
+        rewards = torch.FloatTensor(batch['rewards']).to(self.device)
+        next_states = torch.FloatTensor(batch['next_states']).to(self.device)
+        dones = torch.FloatTensor(batch['dones']).to(self.device)
+
+        # --- Current Q-values ---
+        # Q(s, a) for the actions we actually took
+        current_q = self.policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
+
+        # --- Target Q-values ---
+        with torch.no_grad():
+            # max_a' Q_target(s', a')
+            next_q = self.target_net(next_states).max(dim=1)[0]
+            # If episode is done, there is no next state value
+            target_q = rewards + self.config.gamma * next_q * (1 - dones)
+
+        # --- Compute loss and backprop ---
+        loss = nn.functional.mse_loss(current_q, target_q)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        # Gradient clipping prevents exploding gradients
+        nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=10.0)
+        self.optimizer.step()
+
+        return loss.item()
+
+    def sync_target_network(self) -> None:
+        """
+        Copy policy network weights to target network.
+
+        WHY A SEPARATE TARGET NETWORK?
+            If we used the same network for both Q(s,a) and the target,
+            we'd be chasing a moving target — the network updates change
+            the target values, creating instability.
+
+            The target network provides a STABLE reference point.
+            We update it periodically (every ~1000 episodes).
+        """
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+
+    def save(self, path: str) -> None:
+        """Save model checkpoint."""
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        torch.save({
+            'policy_net': self.policy_net.state_dict(),
+            'target_net': self.target_net.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+            'epsilon': self.epsilon,
+            'steps_done': self.steps_done,
+        }, path)
+
+    def load(self, path: str) -> None:
+        """Load model checkpoint."""
+        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+        self.policy_net.load_state_dict(checkpoint['policy_net'])
+        self.target_net.load_state_dict(checkpoint['target_net'])
+        self.optimizer.load_state_dict(checkpoint['optimizer'])
+        self.epsilon = checkpoint['epsilon']
+        self.steps_done = checkpoint['steps_done']
+
+    def get_q_values(self, state: np.ndarray) -> np.ndarray:
+        """Get Q-values for a state (useful for visualization/debugging)."""
+        with torch.no_grad():
+            state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+            return self.policy_net(state_tensor).cpu().numpy()[0]
