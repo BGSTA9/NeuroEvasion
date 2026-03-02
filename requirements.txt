@@ -1,0 +1,13 @@
+# Core
+torch>=2.0.0
+numpy>=1.24.0
+pygame>=2.5.0
+
+# Training & Monitoring
+tensorboard>=2.14.0
+matplotlib>=3.7.0
+
+# Development
+pytest>=7.4.0
+ruff>=0.1.0
+black>=23.0.0
