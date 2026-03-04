@@ -2,10 +2,13 @@
 main.py — Command-line entry point for NeuroEvasion.
 
 Usage:
-    python main.py train                    # Train agents
-    python main.py train --episodes 10000   # Custom episode count
-    python main.py demo                     # Watch trained agents play
-    python main.py evaluate                 # Evaluate model performance
+    python main.py train                              # Train agents (auto-resume)
+    python main.py train --no-resume                 # Force a fresh start
+    python main.py train --episodes 10000            # Custom episode count
+    python main.py train --checkpoint-interval 500   # Save every 500 episodes
+    python main.py train --drive-sync-dir /content/drive/MyDrive/NeuroEvasion/ckpts
+    python main.py demo --snake-model ...            # Watch trained agents play
+    python main.py evaluate --snake-model ...        # Evaluate model performance
 """
 
 import argparse
@@ -34,6 +37,26 @@ def main():
                               help="Training device")
     train_parser.add_argument("--seed", type=int, default=None,
                               help="Random seed")
+
+    # Checkpoint / resume control
+    resume_group = train_parser.add_mutually_exclusive_group()
+    resume_group.add_argument("--resume", dest="resume", action="store_true",
+                              default=True,
+                              help="Auto-resume from latest checkpoint (default)")
+    resume_group.add_argument("--no-resume", dest="resume", action="store_false",
+                              help="Ignore existing checkpoints and start fresh")
+    train_parser.add_argument("--checkpoint-dir", type=str, default=None,
+                              metavar="PATH",
+                              help="Directory to save/load checkpoints (default: checkpoints/)")
+    train_parser.add_argument("--checkpoint-interval", type=int, default=None,
+                              metavar="N",
+                              help="Save a checkpoint every N episodes")
+    train_parser.add_argument("--keep-last-n", type=int, default=None,
+                              metavar="N",
+                              help="Number of recent checkpoints to keep on disk")
+    train_parser.add_argument("--drive-sync-dir", type=str, default=None,
+                              metavar="PATH",
+                              help="Mirror checkpoints here after each save (e.g. Google Drive)")
 
     # --- Demo command ---
     demo_parser = subparsers.add_parser("demo", help="Watch agents play")
@@ -69,6 +92,25 @@ def main():
             config.training.device = args.device
         if args.seed:
             config.seed = args.seed
+
+        # Apply checkpoint overrides
+        if args.checkpoint_dir:
+            config.checkpoint.checkpoint_dir = args.checkpoint_dir
+        if args.checkpoint_interval:
+            config.checkpoint.interval = args.checkpoint_interval
+        if args.keep_last_n is not None:
+            config.checkpoint.keep_last_n = args.keep_last_n
+        if args.drive_sync_dir:
+            config.checkpoint.drive_sync_dir = args.drive_sync_dir
+
+        # --no-resume: wipe checkpoint dir from manager's perspective by
+        # pointing it at a fresh subdirectory so load_latest() returns None
+        if not args.resume:
+            import time as _time
+            config.checkpoint.checkpoint_dir = (
+                f"{config.checkpoint.checkpoint_dir}/run_{int(_time.time())}"
+            )
+            print("🆕 --no-resume: starting a fresh training run.")
 
         from training.trainer import train
         train(config)
