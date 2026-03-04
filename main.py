@@ -58,6 +58,15 @@ def main():
                               metavar="PATH",
                               help="Mirror checkpoints here after each save (e.g. Google Drive)")
 
+    # Multi-Discrete action space
+    train_parser.add_argument("--multi-discrete", dest="multi_discrete",
+                              action="store_true", default=False,
+                              help="Enable dual-head Multi-Discrete agents "
+                                   "(move + tool-use per step)")
+    train_parser.add_argument("--dueling", dest="dueling",
+                              action="store_true", default=False,
+                              help="Use Dueling DQN decomposition in each action head")
+
     # --- Demo command ---
     demo_parser = subparsers.add_parser("demo", help="Watch agents play")
     demo_parser.add_argument("--snake-model", type=str, required=True,
@@ -111,6 +120,12 @@ def main():
                 f"{config.checkpoint.checkpoint_dir}/run_{int(_time.time())}"
             )
             print("🆕 --no-resume: starting a fresh training run.")
+
+        # Multi-Discrete flags
+        if args.multi_discrete:
+            config.multi_discrete.use_multi_discrete = True
+        if args.dueling:
+            config.multi_discrete.use_dueling = True
 
         from training.trainer import train
         train(config)

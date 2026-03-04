@@ -14,6 +14,15 @@ EMERGENT BEHAVIORS YOU MAY OBSERVE:
     - Snake learns to "cut off" the bait's escape paths
     - Bait learns to fake one direction then go another
 
+MULTI-DISCRETE MODE:
+    When config.multi_discrete.use_multi_discrete is True, both agents
+    are instantiated as MultiDiscreteDQNAgent (dual-head policy). All
+    other training mechanics — checkpointing, logging, epsilon decay,
+    target sync — are identical.
+
+    Tool selection frequencies are accumulated per episode and passed to
+    the logger as `tool_counts` for TensorBoard + CSV analysis.
+
 CHECKPOINT & RESUME:
     Training is automatically resumed from the latest checkpoint if one exists.
     On Google Colab, the H100 runtime may be preempted at any time. This module
@@ -40,8 +49,59 @@ from agents.dqn_agent import DQNAgent
 from training.logger import TrainingLogger
 from training.checkpoint_manager import CheckpointManager
 from utils import set_global_seed
+from game.actions import SNAKE_TOOL_LABELS, BAIT_TOOL_LABELS
 
 log = logging.getLogger(__name__)
+
+
+def _make_agents(config: Config, env: NeuroEvasionEnv) -> tuple:
+    """
+    Factory: construct the correct agent type based on config.
+
+    Returns:
+        (snake_agent, bait_agent, is_multi_discrete)
+    """
+    md = config.multi_discrete
+
+    if md.use_multi_discrete:
+        from agents.multi_discrete_agent import MultiDiscreteDQNAgent
+
+        snake_agent = MultiDiscreteDQNAgent(
+            in_channels       = env.obs_channels,
+            grid_size         = config.game.grid_size,
+            num_move_actions  = env.snake_num_actions,
+            num_tool_actions  = env.snake_num_tool_actions,
+            config            = config.agent,
+            device            = config.training.device,
+            use_dueling       = md.use_dueling,
+        )
+        bait_agent = MultiDiscreteDQNAgent(
+            in_channels       = env.obs_channels,
+            grid_size         = config.game.grid_size,
+            num_move_actions  = env.bait_num_actions,
+            num_tool_actions  = env.bait_num_tool_actions,
+            config            = config.agent,
+            device            = config.training.device,
+            use_dueling       = md.use_dueling,
+        )
+        return snake_agent, bait_agent, True
+
+    else:
+        snake_agent = DQNAgent(
+            in_channels  = env.obs_channels,
+            grid_size    = config.game.grid_size,
+            num_actions  = env.snake_num_actions,
+            config       = config.agent,
+            device       = config.training.device,
+        )
+        bait_agent = DQNAgent(
+            in_channels  = env.obs_channels,
+            grid_size    = config.game.grid_size,
+            num_actions  = env.bait_num_actions,
+            config       = config.agent,
+            device       = config.training.device,
+        )
+        return snake_agent, bait_agent, False
 
 
 def train(config: Config) -> None:
@@ -62,44 +122,29 @@ def train(config: Config) -> None:
     set_global_seed(config.seed)
 
     env = NeuroEvasionEnv(config)
-    in_channels = env.obs_channels
-    grid_size = config.game.grid_size
+    snake_agent, bait_agent, is_multi_discrete = _make_agents(config, env)
 
-    snake_agent = DQNAgent(
-        in_channels=in_channels,
-        grid_size=grid_size,
-        num_actions=env.snake_num_actions,
-        config=config.agent,
-        device=config.training.device,
-    )
-
-    bait_agent = DQNAgent(
-        in_channels=in_channels,
-        grid_size=grid_size,
-        num_actions=env.bait_num_actions,
-        config=config.agent,
-        device=config.training.device,
-    )
+    mode_label = "MULTI-DISCRETE" if is_multi_discrete else "SINGLE-DISCRETE"
 
     # ─────────────────────────────────────────────────────────────────────────
     #  Checkpoint manager
     # ─────────────────────────────────────────────────────────────────────────
     ckpt_cfg = config.checkpoint
     manager = CheckpointManager(
-        checkpoint_dir=ckpt_cfg.checkpoint_dir,
-        keep_last_n=ckpt_cfg.keep_last_n,
-        save_optimizer=ckpt_cfg.save_optimizer,
-        atomic_write=ckpt_cfg.atomic_write,
-        drive_sync_dir=ckpt_cfg.drive_sync_dir,
+        checkpoint_dir = ckpt_cfg.checkpoint_dir,
+        keep_last_n    = ckpt_cfg.keep_last_n,
+        save_optimizer = ckpt_cfg.save_optimizer,
+        atomic_write   = ckpt_cfg.atomic_write,
+        drive_sync_dir = ckpt_cfg.drive_sync_dir,
     )
 
     # ─────────────────────────────────────────────────────────────────────────
     #  Resume detection
     # ─────────────────────────────────────────────────────────────────────────
     start_episode = 1
-    snake_wins = 0
-    total_games = 0
-    log_dir = f"logs/run_{int(time.time())}"    # default: fresh run
+    snake_wins    = 0
+    total_games   = 0
+    log_dir       = f"logs/run_{int(time.time())}"    # default: fresh run
 
     ckpt = manager.load_latest()
     if ckpt is not None:
@@ -108,14 +153,15 @@ def train(config: Config) -> None:
         bait_agent.load_full_state(ckpt["bait_state"])
 
         # ── Restore training counters ────────────────────────────────────────
-        meta = ckpt["training_meta"]
-        start_episode = meta["episode"] + 1          # resume AFTER last saved ep
+        meta          = ckpt["training_meta"]
+        start_episode = meta["episode"] + 1
         snake_wins    = meta.get("snake_wins", 0)
         total_games   = meta.get("total_games", 0)
         log_dir       = meta.get("log_dir", log_dir)
 
         print(f"\n{'=' * 60}")
         print(f"  ▶️  RESUMING from episode {meta['episode']:,d}")
+        print(f"  Mode:        {mode_label}")
         print(f"  Checkpoint:  {meta.get('subdir', 'unknown')}")
         print(f"  Log dir:     {log_dir}")
         print(f"  ε (epsilon): {snake_agent.epsilon:.4f}")
@@ -129,14 +175,21 @@ def train(config: Config) -> None:
         logger = TrainingLogger(log_dir)
 
     # ─────────────────────────────────────────────────────────────────────────
-    #  Print training header (shown regardless of fresh/resume)
+    #  Print training header
     # ─────────────────────────────────────────────────────────────────────────
+    grid_size = config.game.grid_size
+    print(f"  Mode:           {mode_label}")
     print(f"  Episodes:       {config.training.num_episodes:,} "
           f"(starting from {start_episode:,})")
     print(f"  Grid:           {grid_size}×{grid_size}")
     print(f"  Device:         {config.training.device}")
-    print(f"  Snake acts:     {env.snake_num_actions}")
-    print(f"  Bait acts:      {env.bait_num_actions}")
+    print(f"  Snake move acts:{env.snake_num_actions}")
+    print(f"  Bait move acts: {env.bait_num_actions}")
+    if is_multi_discrete:
+        print(f"  Snake tools:    {env.snake_num_tool_actions}  "
+              f"({', '.join(SNAKE_TOOL_LABELS.values())})")
+        print(f"  Bait tools:     {env.bait_num_tool_actions}  "
+              f"({', '.join(BAIT_TOOL_LABELS.values())})")
     print(f"  Batch size:     {config.agent.batch_size}")
     print(f"  LR:             {config.agent.learning_rate}")
     print(f"  Seed:           {config.seed}")
@@ -149,11 +202,9 @@ def train(config: Config) -> None:
     # ─────────────────────────────────────────────────────────────────────────
     #  SIGTERM / SIGINT handler — critical for Colab H100 preemption
     # ─────────────────────────────────────────────────────────────────────────
-    # We use a mutable container so the closure can reach the live episode value
     _state = {"current_episode": start_episode, "saved": False}
 
     def _emergency_save(signum, frame):
-        """Called when the process receives SIGTERM (Colab preemption) or SIGINT."""
         ep = _state["current_episode"]
         print(f"\n⚠️  Signal {signum} received at episode {ep:,d} — "
               f"saving emergency checkpoint …")
@@ -163,8 +214,8 @@ def train(config: Config) -> None:
                 snake_agent=snake_agent,
                 bait_agent=bait_agent,
                 training_meta={
-                    "log_dir": log_dir,
-                    "snake_wins": snake_wins,
+                    "log_dir":     log_dir,
+                    "snake_wins":  snake_wins,
                     "total_games": total_games,
                 },
             )
@@ -194,6 +245,10 @@ def train(config: Config) -> None:
         loss_count      = 0
         step            = 0
 
+        # Tool frequency counters (only used in multi-discrete mode)
+        snake_tool_counts: dict[str, int] = {n: 0 for n in SNAKE_TOOL_LABELS.values()}
+        bait_tool_counts:  dict[str, int] = {n: 0 for n in BAIT_TOOL_LABELS.values()}
+
         for step in range(config.game.max_steps):
             # Both agents select actions
             snake_action = snake_agent.select_action(snake_obs)
@@ -203,11 +258,18 @@ def train(config: Config) -> None:
             (snake_obs_next, bait_obs_next,
              snake_reward, bait_reward, done, info) = env.step(snake_action, bait_action)
 
+            # Track tool usage (multi-discrete mode)
+            if is_multi_discrete:
+                s_tool = info.get("snake_tool", "NONE")
+                b_tool = info.get("bait_tool",  "NONE")
+                snake_tool_counts[s_tool] = snake_tool_counts.get(s_tool, 0) + 1
+                bait_tool_counts[b_tool]  = bait_tool_counts.get(b_tool, 0) + 1
+
             # Store experiences
             snake_agent.store_transition(
                 snake_obs, snake_action, snake_reward, snake_obs_next, done)
             bait_agent.store_transition(
-                bait_obs, bait_action, bait_reward, bait_obs_next, done)
+                bait_obs,  bait_action,  bait_reward,  bait_obs_next,  done)
 
             # Train both agents
             s_loss = snake_agent.train_step()
@@ -240,16 +302,23 @@ def train(config: Config) -> None:
             snake_agent.sync_target_network()
             bait_agent.sync_target_network()
 
+        # Build optional tool_counts dict for logger
+        tool_counts = (
+            {"snake": snake_tool_counts, "bait": bait_tool_counts}
+            if is_multi_discrete else None
+        )
+
         # Log metrics
         logger.log_episode(
-            episode=episode,
-            snake_reward=ep_snake_reward,
-            bait_reward=ep_bait_reward,
-            snake_loss=avg_s_loss,
-            bait_loss=avg_b_loss,
-            winner=info.get("event", "unknown"),
-            steps=step + 1,
-            epsilon=snake_agent.epsilon,
+            episode      = episode,
+            snake_reward = ep_snake_reward,
+            bait_reward  = ep_bait_reward,
+            snake_loss   = avg_s_loss,
+            bait_loss    = avg_b_loss,
+            winner       = info.get("event", "unknown"),
+            steps        = step + 1,
+            epsilon      = snake_agent.epsilon,
+            tool_counts  = tool_counts,
         )
 
         # Print progress
@@ -264,6 +333,14 @@ def train(config: Config) -> None:
                 f"Steps={step+1:>3d} | "
                 f"Loss={avg_s_loss:.4f}"
             )
+            if is_multi_discrete:
+                # Compact tool selection summary
+                s_top = max(snake_tool_counts, key=snake_tool_counts.get)
+                b_top = max(bait_tool_counts,  key=bait_tool_counts.get)
+                print(
+                    f"         🛠 Snake top-tool: {s_top}={snake_tool_counts[s_top]} | "
+                    f"Bait top-tool: {b_top}={bait_tool_counts[b_top]}"
+                )
             # Reset rolling counters
             snake_wins  = 0
             total_games = 0
@@ -271,12 +348,12 @@ def train(config: Config) -> None:
         # ── Periodic checkpoint ───────────────────────────────────────────────
         if episode % ckpt_cfg.interval == 0:
             save_path = manager.save(
-                episode=episode,
-                snake_agent=snake_agent,
-                bait_agent=bait_agent,
-                training_meta={
-                    "log_dir": log_dir,
-                    "snake_wins": snake_wins,
+                episode       = episode,
+                snake_agent   = snake_agent,
+                bait_agent    = bait_agent,
+                training_meta = {
+                    "log_dir":     log_dir,
+                    "snake_wins":  snake_wins,
                     "total_games": total_games,
                 },
             )
@@ -286,14 +363,14 @@ def train(config: Config) -> None:
     #  Final save
     # ─────────────────────────────────────────────────────────────────────────
     final_path = manager.save(
-        episode=config.training.num_episodes,
-        snake_agent=snake_agent,
-        bait_agent=bait_agent,
-        training_meta={
-            "log_dir": log_dir,
-            "snake_wins": snake_wins,
+        episode       = config.training.num_episodes,
+        snake_agent   = snake_agent,
+        bait_agent    = bait_agent,
+        training_meta = {
+            "log_dir":     log_dir,
+            "snake_wins":  snake_wins,
             "total_games": total_games,
-            "final": True,
+            "final":       True,
         },
     )
     # Also write legacy flat files for the demo/evaluate commands
