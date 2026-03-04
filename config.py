@@ -96,11 +96,37 @@ class TrainingConfig:
 
 
 @dataclass
+class MultiDiscreteConfig:
+    """
+    Configuration for the extensible Multi-Discrete action space.
+
+    When use_multi_discrete=False (default), the system falls back to the
+    original single-discrete DQNAgent — no other code changes are required.
+
+    Attributes:
+        use_multi_discrete:       Enable the dual-head agent / network.
+        snake_num_tool_actions:   Tool action count for the snake agent.
+                                  Includes NONE, so minimum is 1.
+        bait_num_tool_actions:    Tool action count for the bait agent.
+                                  Includes NONE, so minimum is 1.
+        tool_cooldown_steps:      [Future] minimum steps between consecutive
+                                  non-NONE tool uses. 0 = no cooldown.
+        use_dueling:              Use the Dueling decomposition in both heads.
+    """
+    use_multi_discrete:     bool  = False
+    snake_num_tool_actions: int   = 3      # NONE, DASH, SLOW
+    bait_num_tool_actions:  int   = 3      # NONE, BLINK, DECOY
+    tool_cooldown_steps:    int   = 0      # stub: unused for now
+    use_dueling:            bool  = False  # Dueling variant for both heads
+
+
+@dataclass
 class Config:
     """Master configuration combining all sub-configs."""
-    game: GameConfig = field(default_factory=GameConfig)
-    rewards: RewardConfig = field(default_factory=RewardConfig)
-    agent: AgentConfig = field(default_factory=AgentConfig)
-    training: TrainingConfig = field(default_factory=TrainingConfig)
-    checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
-    seed: int = 42
+    game:           GameConfig           = field(default_factory=GameConfig)
+    rewards:        RewardConfig         = field(default_factory=RewardConfig)
+    agent:          AgentConfig          = field(default_factory=AgentConfig)
+    training:       TrainingConfig       = field(default_factory=TrainingConfig)
+    checkpoint:     CheckpointConfig     = field(default_factory=CheckpointConfig)
+    multi_discrete: MultiDiscreteConfig  = field(default_factory=MultiDiscreteConfig)
+    seed:           int                  = 42
