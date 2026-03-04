@@ -60,7 +60,8 @@ class TrainingLogger:
             self.csv_writer = csv.writer(self.csv_file)
             self.csv_writer.writerow([
                 "episode", "snake_reward", "bait_reward", "snake_loss",
-                "bait_loss", "winner", "steps", "epsilon", "timestamp"
+                "bait_loss", "winner", "steps", "epsilon",
+                "snake_tool_counts", "bait_tool_counts", "timestamp"
             ])
 
     @classmethod
@@ -98,10 +99,26 @@ class TrainingLogger:
         )
         return instance
 
-    def log_episode(self, episode: int, snake_reward: float, bait_reward: float,
-                    snake_loss: float, bait_loss: float, winner: str,
-                    steps: int, epsilon: float) -> None:
-        """Log metrics for a completed episode."""
+    def log_episode(
+        self,
+        episode: int,
+        snake_reward: float,
+        bait_reward: float,
+        snake_loss: float,
+        bait_loss: float,
+        winner: str,
+        steps: int,
+        epsilon: float,
+        tool_counts: dict | None = None,
+    ) -> None:
+        """
+        Log metrics for a completed episode.
+
+        Args:
+            tool_counts: Optional dict with keys "snake" and "bait", each
+                         mapping tool_name -> count for this episode.
+                         Only passed when multi_discrete mode is active.
+        """
         # TensorBoard
         self.writer.add_scalar("Reward/Snake", snake_reward, episode)
         self.writer.add_scalar("Reward/Bait", bait_reward, episode)
@@ -113,11 +130,27 @@ class TrainingLogger:
         snake_win = 1.0 if winner == "capture" else 0.0
         self.writer.add_scalar("WinRate/Snake", snake_win, episode)
 
+        # Tool selection frequency histograms (multi-discrete mode only)
+        snake_tool_str = ""
+        bait_tool_str  = ""
+        if tool_counts is not None:
+            for tool_name, count in tool_counts.get("snake", {}).items():
+                self.writer.add_scalar(
+                    f"Tools/Snake/{tool_name}", count, episode
+                )
+            for tool_name, count in tool_counts.get("bait", {}).items():
+                self.writer.add_scalar(
+                    f"Tools/Bait/{tool_name}", count, episode
+                )
+            snake_tool_str = str(tool_counts.get("snake", {}))
+            bait_tool_str  = str(tool_counts.get("bait", {}))
+
         # CSV
         self.csv_writer.writerow([
             episode, f"{snake_reward:.4f}", f"{bait_reward:.4f}",
             f"{snake_loss:.6f}", f"{bait_loss:.6f}",
-            winner, steps, f"{epsilon:.4f}", datetime.now().isoformat()
+            winner, steps, f"{epsilon:.4f}",
+            snake_tool_str, bait_tool_str, datetime.now().isoformat()
         ])
 
     def log_evaluation(self, episode: int, snake_win_rate: float,
