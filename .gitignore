@@ -209,3 +209,19 @@ __marimo__/
 
 # classified directories
 ⚠️CLASSIFIED⚠️/
+
+# ─── Machine Learning artifacts ───────────────────────────────────────────────
+# Model weights / checkpoints — large binary files; store on Drive / HuggingFace
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+checkpoints/
+logs/
+
+# TensorBoard event files
+events.out.tfevents.*
+
+# Temporary atomic-write files created by CheckpointManager
+*.pt.tmp
+*.json.tmp
