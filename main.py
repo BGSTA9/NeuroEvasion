@@ -2,7 +2,7 @@
 main.py — Command-line entry point for NeuroEvasion.
 
 Usage:
-    python main.py train                              # Train agents (auto-resume)
+    python main.py train                             # Train agents (auto-resume)
     python main.py train --no-resume                 # Force a fresh start
     python main.py train --episodes 10000            # Custom episode count
     python main.py train --checkpoint-interval 500   # Save every 500 episodes
