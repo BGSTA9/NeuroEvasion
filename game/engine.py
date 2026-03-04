@@ -7,6 +7,12 @@ This is the heart of NeuroEvasion. The engine:
 3. Computes rewards based on the outcome
 4. Detects terminal conditions (capture, death, timeout)
 
+MULTI-DISCRETE EXTENSION:
+    step() now accepts either a plain int (single-discrete, legacy) or a
+    MultiDiscreteAction (multi-discrete). The tool component is dispatched
+    to _apply_tool() which logs tool choices and — once tool mechanics are
+    implemented — applies their in-game effects.
+
 SEPARATION OF CONCERNS:
     The engine knows NOTHING about neural networks, training, or rendering.
     It is pure game logic. This makes it testable, fast, and reusable.
@@ -15,7 +21,7 @@ SEPARATION OF CONCERNS:
 from game.grid import Grid, CellType
 from game.snake import Snake
 from game.bait import Bait
-from game.actions import Action
+from game.actions import Action, MultiDiscreteAction, SNAKE_TOOL_LABELS, BAIT_TOOL_LABELS
 from config import GameConfig, RewardConfig
 
 
@@ -74,20 +80,29 @@ class GameEngine:
             "bait_pos": self.bait.position,
         }
 
-    def step(self, snake_action: int, bait_action: int) -> tuple[float, float, bool, dict]:
+    # ──────────────────────────────────────────────────────────────────────────
+    #  Public API
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def step(self, snake_action: int | MultiDiscreteAction,
+             bait_action: int | MultiDiscreteAction) -> tuple[float, float, bool, dict]:
         """
         Execute one game step.
 
+        Accepts either plain int actions (legacy single-discrete) or
+        MultiDiscreteAction instances (multi-discrete mode).
+
         Order of operations (critical for fairness):
-            1. Snake chooses and moves
-            2. Check if snake died (wall/self collision)
-            3. Bait chooses and moves
-            4. Check if bait was captured
-            5. Compute rewards
+            1. Decode actions; resolve tool components
+            2. Snake moves (movement component only)
+            3. Check if snake died (wall/self collision)
+            4. Bait moves (movement component only)
+            5. Check if bait was captured
+            6. Compute rewards + apply tool effects (stub)
 
         Args:
-            snake_action: integer action for the snake (0-3)
-            bait_action: integer action for the bait (0-3, or 0-4 if STAY enabled)
+            snake_action: int or MultiDiscreteAction for the snake
+            bait_action:  int or MultiDiscreteAction for the bait
 
         Returns:
             (snake_reward, bait_reward, done, info)
@@ -98,11 +113,19 @@ class GameEngine:
         self.current_step += 1
         info = {"event": "step"}
 
+        # ── Decode multi-discrete actions ──────────────────────────────────────
+        snake_move_int, snake_tool_int = self._decode_action(snake_action)
+        bait_move_int,  bait_tool_int  = self._decode_action(bait_action)
+
+        # Record tool choices in info for logging / analysis
+        info["snake_tool"] = SNAKE_TOOL_LABELS.get(snake_tool_int, str(snake_tool_int))
+        info["bait_tool"]  = BAIT_TOOL_LABELS.get(bait_tool_int,  str(bait_tool_int))
+
         # Calculate distance BEFORE moves (for reward shaping)
         dist_before = self._manhattan_distance()
 
         # --- 1. Snake moves ---
-        self.snake.set_direction(Action(snake_action))
+        self.snake.set_direction(Action(snake_move_int))
         new_head = self.snake.move()
 
         # --- 2. Check snake death ---
@@ -136,7 +159,7 @@ class GameEngine:
 
         # --- 4. Bait moves ---
         if self.current_step % self.config.bait_move_every == 0:
-            self.bait.move(Action(bait_action), self.grid)
+            self.bait.move(Action(bait_move_int), self.grid)
 
         # --- 5. Check capture after bait move (bait moved into snake head) ---
         if self.bait.position == self.snake.head:
@@ -165,26 +188,114 @@ class GameEngine:
                 info,
             )
 
-        # --- 7. Compute shaping rewards ---
+        # --- 7. Apply tool effects (extensible stubs) ---
+        tool_snake_bonus, tool_bait_bonus = self._apply_tools(
+            snake_tool_int, bait_tool_int, info
+        )
+
+        # --- 8. Compute shaping rewards ---
         dist_after = self._manhattan_distance()
 
         if dist_after < dist_before:
             # Snake got closer → reward snake, penalize bait
             snake_reward = self.rewards.distance_reward + self.rewards.step_penalty_snake
-            bait_reward = -self.rewards.distance_reward + self.rewards.step_reward_bait
+            bait_reward  = -self.rewards.distance_reward + self.rewards.step_reward_bait
         elif dist_after > dist_before:
             # Bait escaped further → reward bait, penalize snake
             snake_reward = -self.rewards.distance_reward + self.rewards.step_penalty_snake
-            bait_reward = self.rewards.distance_reward + self.rewards.step_reward_bait
+            bait_reward  =  self.rewards.distance_reward + self.rewards.step_reward_bait
         else:
             snake_reward = self.rewards.step_penalty_snake
-            bait_reward = self.rewards.step_reward_bait
+            bait_reward  = self.rewards.step_reward_bait
+
+        # Incorporate any tool bonuses/penalties
+        snake_reward += tool_snake_bonus
+        bait_reward  += tool_bait_bonus
 
         info["distance"] = dist_after
         info["step"] = self.current_step
 
         self._update_grid()
         return (snake_reward, bait_reward, False, info)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    #  Internal helpers
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _decode_action(action: int | MultiDiscreteAction) -> tuple[int, int]:
+        """
+        Return (move_int, tool_int) regardless of action format.
+
+        Plain int → (action, 0)  [tool NONE, fully backward-compatible]
+        MultiDiscreteAction → (move, tool)
+        """
+        if isinstance(action, MultiDiscreteAction):
+            return action.move, action.tool
+        return int(action), 0  # legacy: tool = NONE
+
+    def _apply_tools(
+        self,
+        snake_tool: int,
+        bait_tool: int,
+        info: dict,
+    ) -> tuple[float, float]:
+        """
+        Dispatch tool-use sub-actions to their effect handlers.
+
+        Returns:
+            (snake_bonus_reward, bait_bonus_reward)
+
+        EXTENSIBILITY:
+            Add new tools by inserting into the if/elif chains below.
+            Each tool returns a float bonus/penalty that is added to the
+            agent's shaped reward for this step.
+
+        CURRENT STATUS: All tools are stubs (return 0.0). Their selection
+        is recorded in `info` for trajectory analysis; mechanical effects
+        will be implemented per-tool in follow-up sprints.
+        """
+        snake_bonus = self._apply_snake_tool(snake_tool, info)
+        bait_bonus  = self._apply_bait_tool(bait_tool, info)
+        return snake_bonus, bait_bonus
+
+    def _apply_snake_tool(self, tool: int, info: dict) -> float:
+        """
+        Apply a snake tool effect. Returns reward bonus for this step.
+
+        Tool registry:
+            0 (NONE)  — no effect
+            1 (DASH)  — [stub] sprint move; cost: small energy penalty
+            2 (SLOW)  — [stub] slow bait; cost: small energy penalty
+        """
+        if tool == 0:    # NONE
+            return 0.0
+        elif tool == 1:  # DASH — stub
+            info["snake_tool_active"] = "DASH"
+            return 0.0   # placeholder: will return speed bonus once implemented
+        elif tool == 2:  # SLOW — stub
+            info["snake_tool_active"] = "SLOW"
+            return 0.0   # placeholder: will penalise bait movement subtraction
+        return 0.0       # unknown tool → no-op
+
+    def _apply_bait_tool(self, tool: int, info: dict) -> float:
+        """
+        Apply a bait tool effect. Returns reward bonus for this step.
+
+        Tool registry:
+            0 (NONE)  — no effect
+            1 (BLINK) — [stub] teleport one safe cell; cost: small energy penalty
+            2 (DECOY) — [stub] place ghost marker; cost: small energy penalty
+        """
+        if tool == 0:    # NONE
+            return 0.0
+        elif tool == 1:  # BLINK — stub
+            info["bait_tool_active"] = "BLINK"
+            return 0.0   # placeholder: will apply position shift once implemented
+        elif tool == 2:  # DECOY — stub
+            info["bait_tool_active"] = "DECOY"
+            return 0.0   # placeholder: will add ghost channel to obs once implemented
+        return 0.0       # unknown tool → no-op
 
     def _manhattan_distance(self) -> int:
         """Manhattan distance between snake head and bait."""
@@ -209,11 +320,11 @@ class GameEngine:
     def get_state(self) -> dict:
         """Return the full game state as a dictionary."""
         return {
-            "grid": self.grid.cells.copy(),
+            "grid":       self.grid.cells.copy(),
             "snake_head": self.snake.head if self.snake else None,
             "snake_body": list(self.snake.body) if self.snake else [],
-            "bait_pos": self.bait.position if self.bait else None,
-            "step": self.current_step,
-            "done": self.done,
-            "winner": self.winner,
+            "bait_pos":   self.bait.position if self.bait else None,
+            "step":       self.current_step,
+            "done":       self.done,
+            "winner":     self.winner,
         }
