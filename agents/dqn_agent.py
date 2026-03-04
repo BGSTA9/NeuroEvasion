@@ -162,25 +162,63 @@ class DQNAgent:
         """
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
+    def get_full_state(self, include_optimizer: bool = True) -> dict:
+        """
+        Return a complete, resumable snapshot of this agent.
+
+        The returned dict contains everything needed to reconstruct the
+        agent at exactly the same point in training:
+
+            policy_net      — the network being trained
+            target_net      — the stable reference network
+            optimizer       — Adam state (step counts, momentum buffers)
+            epsilon         — current exploration rate
+            steps_done      — total environment steps taken (drives ε-decay)
+
+        Args:
+            include_optimizer:  Set to False to save disk space at the cost
+                                of resetting the optimizer state on resume.
+        """
+        state = {
+            "policy_net": self.policy_net.state_dict(),
+            "target_net": self.target_net.state_dict(),
+            "epsilon": self.epsilon,
+            "steps_done": self.steps_done,
+        }
+        if include_optimizer:
+            state["optimizer"] = self.optimizer.state_dict()
+        return state
+
+    def load_full_state(self, state: dict) -> None:
+        """
+        Restore agent to a previously saved state.
+
+        Handles the case where the checkpoint was saved without optimizer
+        state (e.g. when include_optimizer=False was used at save time).
+        In that scenario the optimizer starts fresh but weights and epsilon
+        are resumed correctly.
+
+        Args:
+            state: Dict as returned by get_full_state().
+        """
+        self.policy_net.load_state_dict(state["policy_net"])
+        self.target_net.load_state_dict(state["target_net"])
+        self.epsilon = state["epsilon"]
+        self.steps_done = state["steps_done"]
+        if "optimizer" in state:
+            self.optimizer.load_state_dict(state["optimizer"])
+
+    # ─── Backward-compatible thin wrappers ───────────────────────────────────
+
     def save(self, path: str) -> None:
-        """Save model checkpoint."""
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        torch.save({
-            'policy_net': self.policy_net.state_dict(),
-            'target_net': self.target_net.state_dict(),
-            'optimizer': self.optimizer.state_dict(),
-            'epsilon': self.epsilon,
-            'steps_done': self.steps_done,
-        }, path)
+        """Save a checkpoint to a flat .pt file (legacy interface)."""
+        os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
+        torch.save(self.get_full_state(include_optimizer=True), path)
 
     def load(self, path: str) -> None:
-        """Load model checkpoint."""
-        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
-        self.policy_net.load_state_dict(checkpoint['policy_net'])
-        self.target_net.load_state_dict(checkpoint['target_net'])
-        self.optimizer.load_state_dict(checkpoint['optimizer'])
-        self.epsilon = checkpoint['epsilon']
-        self.steps_done = checkpoint['steps_done']
+        """Load a checkpoint from a flat .pt file (legacy interface)."""
+        state = torch.load(path, map_location=self.device, weights_only=False)
+        self.load_full_state(state)
 
     def get_q_values(self, state: np.ndarray) -> np.ndarray:
         """Get Q-values for a state (useful for visualization/debugging)."""
