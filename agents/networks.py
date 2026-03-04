@@ -1,6 +1,23 @@
 """
 agents/networks.py — Neural network architectures for DQN agents.
 
+MULTI-DISCRETE EXTENSION:
+    MultiDiscreteNetwork and MultiDiscreteDuelingNetwork implement a
+    shared-backbone / dual-head architecture:
+
+        Shared CNN (feature extractor)
+            ├── move_head → Q(s, move_a)   [num_move_actions outputs]
+            └── tool_head → Q(s, tool_a)   [num_tool_actions outputs]
+
+    WHY A SHARED BACKBONE?
+        Both action heads need to understand the same spatial features:
+        where the snake is, where the bait is, how close are the walls.
+        Sharing the CNN means we train those features once, not twice,
+        reducing parameters and computation while improving sample efficiency.
+
+    The Dueling variant further decomposes each head into V(s) + A(s,a)
+    for better value estimation in sparse-reward conditions.
+
 ARCHITECTURE OVERVIEW:
     We use a Convolutional Neural Network (CNN) because our observations
     are 2D grids (like images). The CNN learns spatial patterns:
@@ -140,3 +157,155 @@ class DuelingDQN(nn.Module):
         # Q = V + (A - mean(A))  → ensures identifiability
         q_values = value + advantage - advantage.mean(dim=1, keepdim=True)
         return q_values
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  Multi-Discrete Network Architectures
+# ──────────────────────────────────────────────────────────────────────────────
+
+class MultiDiscreteNetwork(nn.Module):
+    """
+    Multi-head DQN for the Multi-Discrete action space.
+
+    Outputs TWO independent Q-value vectors per forward pass:
+        move_q:  Q(s, movement_action)   shape (batch, num_move_actions)
+        tool_q:  Q(s, tool_action)       shape (batch, num_tool_actions)
+
+    Both heads share the expensive CNN feature extractor, so total
+    parameter count grows only slightly versus the single-head version.
+
+    Args:
+        in_channels:       input channels (frame_stack × 4)
+        grid_size:         H=W of the observation grid
+        num_move_actions:  number of discrete movement actions (4 or 5)
+        num_tool_actions:  number of discrete tool actions (3 by default)
+    """
+
+    def __init__(self, in_channels: int, grid_size: int,
+                 num_move_actions: int, num_tool_actions: int):
+        super().__init__()
+
+        # ── Shared convolutional backbone ──────────────────────────────────────
+        self.conv_layers = nn.Sequential(
+            nn.Conv2d(in_channels, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+        )
+
+        flat_size = 64 * grid_size * grid_size
+
+        # ── Movement Q-head ────────────────────────────────────────────────────
+        self.move_head = nn.Sequential(
+            nn.Linear(flat_size, 512),
+            nn.ReLU(),
+            nn.Linear(512, num_move_actions),
+        )
+
+        # ── Tool-use Q-head ────────────────────────────────────────────────────
+        self.tool_head = nn.Sequential(
+            nn.Linear(flat_size, 256),
+            nn.ReLU(),
+            nn.Linear(256, num_tool_actions),
+        )
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Forward pass: observation → (move_q, tool_q).
+
+        Args:
+            x: (batch, in_channels, H, W)
+
+        Returns:
+            move_q: (batch, num_move_actions)
+            tool_q: (batch, num_tool_actions)
+        """
+        features = self.conv_layers(x)
+        flat = features.view(features.size(0), -1)
+        return self.move_head(flat), self.tool_head(flat)
+
+
+class MultiDiscreteDuelingNetwork(nn.Module):
+    """
+    Dueling Multi-head DQN for the Multi-Discrete action space.
+
+    Each action head uses the Dueling decomposition:
+        Q(s, a) = V(s) + A(s, a) - mean(A(s, ·))
+
+    This is especially powerful for the tool head, where most states have
+    tool=NONE as the dominant action — Dueling's V(s) term correctly
+    captures that the state value is independent of which (uncommon) tool
+    is chosen.
+
+    Args:
+        in_channels:       input channels (frame_stack × 4)
+        grid_size:         H=W of the observation grid
+        num_move_actions:  number of discrete movement actions (4 or 5)
+        num_tool_actions:  number of discrete tool actions (3 by default)
+    """
+
+    def __init__(self, in_channels: int, grid_size: int,
+                 num_move_actions: int, num_tool_actions: int):
+        super().__init__()
+
+        # ── Shared convolutional backbone ──────────────────────────────────────
+        self.conv_layers = nn.Sequential(
+            nn.Conv2d(in_channels, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+        )
+
+        flat_size = 64 * grid_size * grid_size
+
+        # ── Movement head: Dueling streams ─────────────────────────────────────
+        self.move_value = nn.Sequential(
+            nn.Linear(flat_size, 512), nn.ReLU(), nn.Linear(512, 1)
+        )
+        self.move_advantage = nn.Sequential(
+            nn.Linear(flat_size, 512), nn.ReLU(), nn.Linear(512, num_move_actions)
+        )
+
+        # ── Tool head: Dueling streams ─────────────────────────────────────────
+        self.tool_value = nn.Sequential(
+            nn.Linear(flat_size, 256), nn.ReLU(), nn.Linear(256, 1)
+        )
+        self.tool_advantage = nn.Sequential(
+            nn.Linear(flat_size, 256), nn.ReLU(), nn.Linear(256, num_tool_actions)
+        )
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Forward pass: observation → (move_q, tool_q) with Dueling decomposition.
+
+        Args:
+            x: (batch, in_channels, H, W)
+
+        Returns:
+            move_q: (batch, num_move_actions)
+            tool_q: (batch, num_tool_actions)
+        """
+        features = self.conv_layers(x)
+        flat = features.view(features.size(0), -1)
+
+        # Movement head
+        mv = self.move_value(flat)                    # (batch, 1)
+        ma = self.move_advantage(flat)               # (batch, num_move_actions)
+        move_q = mv + ma - ma.mean(dim=1, keepdim=True)
+
+        # Tool head
+        tv = self.tool_value(flat)                   # (batch, 1)
+        ta = self.tool_advantage(flat)               # (batch, num_tool_actions)
+        tool_q = tv + ta - ta.mean(dim=1, keepdim=True)
+
+        return move_q, tool_q
