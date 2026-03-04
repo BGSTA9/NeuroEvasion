@@ -36,75 +36,75 @@ CHECKPOINT & RESUME:
     Nothing is ever lost beyond the episodes since the last save.
 """
 
-import os
-import sys
-import time
-import signal
-import logging
-import numpy as np
+import os # os module
+import sys # sys module
+import time # time module
+import signal # signal module
+import logging # logging module
+import numpy as np # numpy module
 
-from config import Config
-from environment.env import NeuroEvasionEnv
-from agents.dqn_agent import DQNAgent
-from training.logger import TrainingLogger
-from training.checkpoint_manager import CheckpointManager
-from utils import set_global_seed
-from game.actions import SNAKE_TOOL_LABELS, BAIT_TOOL_LABELS
+from config import Config # config module
+from environment.env import NeuroEvasionEnv # environment module
+from agents.dqn_agent import DQNAgent # dqn agent module
+from training.logger import TrainingLogger # logger module
+from training.checkpoint_manager import CheckpointManager # checkpoint manager module
+from utils import set_global_seed # utils module
+from game.actions import SNAKE_TOOL_LABELS, BAIT_TOOL_LABELS # game actions module
 
-log = logging.getLogger(__name__)
+log = logging.getLogger(__name__) # logger
 
 
-def _make_agents(config: Config, env: NeuroEvasionEnv) -> tuple:
+def _make_agents(config: Config, env: NeuroEvasionEnv) -> tuple: # make agents function
     """
     Factory: construct the correct agent type based on config.
 
     Returns:
         (snake_agent, bait_agent, is_multi_discrete)
     """
-    md = config.multi_discrete
+    md = config.multi_discrete # multi_discrete config, meaning: snake and bait use different action spaces
 
-    if md.use_multi_discrete:
-        from agents.multi_discrete_agent import MultiDiscreteDQNAgent
+    if md.use_multi_discrete: # if multi_discrete is enabled
+        from agents.multi_discrete_agent import MultiDiscreteDQNAgent # import MultiDiscreteDQNAgent
 
         snake_agent = MultiDiscreteDQNAgent(
-            in_channels       = env.obs_channels,
-            grid_size         = config.game.grid_size,
-            num_move_actions  = env.snake_num_actions,
-            num_tool_actions  = env.snake_num_tool_actions,
-            config            = config.agent,
-            device            = config.training.device,
-            use_dueling       = md.use_dueling,
+            in_channels       = env.obs_channels, # number of channels in the observation space
+            grid_size         = config.game.grid_size, # grid size of the game
+            num_move_actions  = env.snake_num_actions, # number of move actions
+            num_tool_actions  = env.snake_num_tool_actions, # number of tool actions
+            config            = config.agent, # agent config
+            device            = config.training.device, # device to run the agent on
+            use_dueling       = md.use_dueling, # use dueling DQN
         )
         bait_agent = MultiDiscreteDQNAgent(
-            in_channels       = env.obs_channels,
-            grid_size         = config.game.grid_size,
-            num_move_actions  = env.bait_num_actions,
-            num_tool_actions  = env.bait_num_tool_actions,
-            config            = config.agent,
-            device            = config.training.device,
-            use_dueling       = md.use_dueling,
+            in_channels       = env.obs_channels, # number of channels in the observation space
+            grid_size         = config.game.grid_size, # grid size of the game
+            num_move_actions  = env.bait_num_actions, # number of move actions
+            num_tool_actions  = env.bait_num_tool_actions, # number of tool actions
+            config            = config.agent, # agent config
+            device            = config.training.device, # device to run the agent on
+            use_dueling       = md.use_dueling, # use dueling DQN
         )
-        return snake_agent, bait_agent, True
+        return snake_agent, bait_agent, True # return agents and is_multi_discrete flag
 
     else:
         snake_agent = DQNAgent(
-            in_channels  = env.obs_channels,
-            grid_size    = config.game.grid_size,
-            num_actions  = env.snake_num_actions,
-            config       = config.agent,
-            device       = config.training.device,
+            in_channels  = env.obs_channels, # number of channels in the observation space
+            grid_size    = config.game.grid_size, # grid size of the game
+            num_actions  = env.snake_num_actions, # number of actions
+            config       = config.agent, # agent config
+            device       = config.training.device, # device to run the agent on
         )
         bait_agent = DQNAgent(
-            in_channels  = env.obs_channels,
-            grid_size    = config.game.grid_size,
-            num_actions  = env.bait_num_actions,
-            config       = config.agent,
-            device       = config.training.device,
+            in_channels  = env.obs_channels, # number of channels in the observation space
+            grid_size    = config.game.grid_size, # grid size of the game
+            num_actions  = env.bait_num_actions, # number of actions
+            config       = config.agent, # agent config
+            device       = config.training.device, # device to run the agent on
         )
         return snake_agent, bait_agent, False
 
 
-def train(config: Config) -> None:
+def train(config: Config) -> None: # main training function
     """
     Main training function.
 
@@ -119,23 +119,23 @@ def train(config: Config) -> None:
     # ─────────────────────────────────────────────────────────────────────────
     #  Setup
     # ─────────────────────────────────────────────────────────────────────────
-    set_global_seed(config.seed)
+    set_global_seed(config.seed) # set global seed for reproducibility
 
-    env = NeuroEvasionEnv(config)
-    snake_agent, bait_agent, is_multi_discrete = _make_agents(config, env)
+    env = NeuroEvasionEnv(config) # create environment
+    snake_agent, bait_agent, is_multi_discrete = _make_agents(config, env) # create agents
 
-    mode_label = "MULTI-DISCRETE" if is_multi_discrete else "SINGLE-DISCRETE"
+    mode_label = "MULTI-DISCRETE" if is_multi_discrete else "SINGLE-DISCRETE" # mode label
 
     # ─────────────────────────────────────────────────────────────────────────
     #  Checkpoint manager
     # ─────────────────────────────────────────────────────────────────────────
-    ckpt_cfg = config.checkpoint
-    manager = CheckpointManager(
-        checkpoint_dir = ckpt_cfg.checkpoint_dir,
-        keep_last_n    = ckpt_cfg.keep_last_n,
-        save_optimizer = ckpt_cfg.save_optimizer,
-        atomic_write   = ckpt_cfg.atomic_write,
-        drive_sync_dir = ckpt_cfg.drive_sync_dir,
+    ckpt_cfg = config.checkpoint # checkpoint config
+    manager = CheckpointManager( # create checkpoint manager
+        checkpoint_dir = ckpt_cfg.checkpoint_dir, # checkpoint directory
+        keep_last_n    = ckpt_cfg.keep_last_n, # keep last n checkpoints
+        save_optimizer = ckpt_cfg.save_optimizer, # save optimizer
+        atomic_write   = ckpt_cfg.atomic_write, # atomic write
+        drive_sync_dir = ckpt_cfg.drive_sync_dir, # drive sync directory
     )
 
     # ─────────────────────────────────────────────────────────────────────────
