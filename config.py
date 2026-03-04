@@ -5,6 +5,13 @@ WHY A DATACLASS?
     Dataclasses give us type-checked, documented, immutable configuration.
     Every "magic number" in the project traces back to here.
 """
+# ──────────────────────────────────────────────────────────────────────────────
+# NOTE ON COLAB H100 USAGE
+# Set training.device = "cuda" and checkpoint.drive_sync_dir to your
+# mounted Google Drive path so checkpoints survive runtime restarts.
+# Example:
+#   config.checkpoint.drive_sync_dir = "/content/drive/MyDrive/NeuroEvasion/ckpts"
+# ──────────────────────────────────────────────────────────────────────────────
 
 from dataclasses import dataclass, field
 
@@ -50,10 +57,37 @@ class AgentConfig:
 
 
 @dataclass
+class CheckpointConfig:
+    """
+    Configuration for the checkpoint & resume system.
+
+    Attributes:
+        checkpoint_dir:     Root directory for all checkpoint subdirectories.
+        interval:           Save a checkpoint every N episodes.
+        keep_last_n:        Keep the N most recent regular checkpoints;
+                            older ones are deleted to save disk space.
+        save_optimizer:     Include the Adam optimizer state so the learning
+                            rate schedule and momentum are restored exactly.
+        atomic_write:       Write to a .tmp file then os.replace(); guarantees
+                            the previous checkpoint is never corrupted by a
+                            crash mid-write.
+        drive_sync_dir:     If non-empty, mirror each checkpoint to this path
+                            after saving (e.g. a Google Drive mount on Colab).
+                            Training continues even if the sync fails.
+    """
+    checkpoint_dir: str = "checkpoints"
+    interval: int = 1_000             # Save every 1 000 episodes (tunable)
+    keep_last_n: int = 5              # Keep 5 rolling checkpoints on disk
+    save_optimizer: bool = True       # Essential for exact resume
+    atomic_write: bool = True         # Crash-safe writes
+    drive_sync_dir: str = ""         # Mount path for Google Drive sync
+
+
+@dataclass
 class TrainingConfig:
     """Configuration for the training loop."""
     num_episodes: int = 500_000
-    checkpoint_interval: int = 10_000
+    checkpoint_interval: int = 10_000  # Deprecated: use CheckpointConfig.interval
     log_interval: int = 100
     eval_interval: int = 5_000
     eval_episodes: int = 100
@@ -68,4 +102,5 @@ class Config:
     rewards: RewardConfig = field(default_factory=RewardConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
+    checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
     seed: int = 42
