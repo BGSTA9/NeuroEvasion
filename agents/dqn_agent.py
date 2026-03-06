@@ -15,7 +15,7 @@ THE TRAINING ALGORITHM (pseudocode):
     4. Store (s, a, r, s', done) in replay buffer
     5. Sample random batch from buffer
     6. Compute target: y = r + γ × max Q_target(s', a')
-    7. Compute loss: L = (Q(s, a) - y)²
+    7. Compute loss: L = Huber(Q(s, a) - y)   ← Huber, not MSE
     8. Backpropagate and update weights
     9. Periodically copy weights to target network
 """
@@ -109,7 +109,19 @@ class DQNAgent:
 
         THE CORE DQN UPDATE:
             target = reward + γ × max_a' Q_target(next_state, a')
-            loss = MSE(Q_policy(state, action), target)
+            loss   = Huber(Q_policy(state, action), target)
+
+        WHY HUBER LOSS (smooth_l1_loss)?
+            MSE squares large errors, which causes exploding gradients when
+            Q-value estimates are far off (common in co-evolutionary training
+            where the opponent keeps shifting the reward landscape).
+            Huber is quadratic for small errors (precise) and linear for large
+            ones (robust) — it stops runaway loss spikes dead.
+
+        WHY max_norm=grad_clip (1.0 vs old 10.0)?
+            max_norm=10.0 is so loose it never actually clips anything.
+            max_norm=1.0 hard-caps the gradient vector length, preventing
+            a single bad batch from taking a catastrophically large step.
 
         Returns:
             loss value (float) or None if buffer isn't ready
@@ -120,11 +132,11 @@ class DQNAgent:
         batch = self.memory.sample(self.config.batch_size)
 
         # Convert to tensors
-        states = torch.FloatTensor(batch['states']).to(self.device)
-        actions = torch.LongTensor(batch['actions']).to(self.device)
-        rewards = torch.FloatTensor(batch['rewards']).to(self.device)
+        states      = torch.FloatTensor(batch['states']).to(self.device)
+        actions     = torch.LongTensor(batch['actions']).to(self.device)
+        rewards     = torch.FloatTensor(batch['rewards']).to(self.device)
         next_states = torch.FloatTensor(batch['next_states']).to(self.device)
-        dones = torch.FloatTensor(batch['dones']).to(self.device)
+        dones       = torch.FloatTensor(batch['dones']).to(self.device)
 
         # --- Current Q-values ---
         # Q(s, a) for the actions we actually took
@@ -137,13 +149,23 @@ class DQNAgent:
             # If episode is done, there is no next state value
             target_q = rewards + self.config.gamma * next_q * (1 - dones)
 
-        # --- Compute loss and backprop ---
-        loss = nn.functional.mse_loss(current_q, target_q)
+        # --- Compute Huber loss ---
+        # FIX 1: smooth_l1_loss = true Huber loss.
+        # Previous mse_loss was squaring large TD errors, amplifying
+        # the Q-value divergence visible from episode 25,000 onwards.
+        loss = nn.functional.smooth_l1_loss(current_q, target_q)
 
+        # --- Backprop ---
         self.optimizer.zero_grad()
         loss.backward()
-        # Gradient clipping prevents exploding gradients
-        nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=10.0)
+
+        # FIX 2: tightened gradient clip from max_norm=10.0 → config.grad_clip (1.0).
+        # The old value of 10.0 was so permissive it never triggered.
+        # 1.0 hard-caps the gradient vector norm on every step, stopping
+        # the loss spiral that appeared once epsilon hit its floor at ep 21,700.
+        nn.utils.clip_grad_norm_(self.policy_net.parameters(),
+                                 max_norm=self.config.grad_clip)
+
         self.optimizer.step()
 
         return loss.item()
@@ -182,7 +204,7 @@ class DQNAgent:
         state = {
             "policy_net": self.policy_net.state_dict(),
             "target_net": self.target_net.state_dict(),
-            "epsilon": self.epsilon,
+            "epsilon":    self.epsilon,
             "steps_done": self.steps_done,
         }
         if include_optimizer:
@@ -203,7 +225,7 @@ class DQNAgent:
         """
         self.policy_net.load_state_dict(state["policy_net"])
         self.target_net.load_state_dict(state["target_net"])
-        self.epsilon = state["epsilon"]
+        self.epsilon    = state["epsilon"]
         self.steps_done = state["steps_done"]
         if "optimizer" in state:
             self.optimizer.load_state_dict(state["optimizer"])
