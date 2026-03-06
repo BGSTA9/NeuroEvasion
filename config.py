@@ -45,15 +45,16 @@ class RewardConfig:
 @dataclass
 class AgentConfig:
     """Configuration for the DQN agents."""
-    learning_rate: float = 1e-4
-    gamma: float = 0.99              # Discount factor
-    epsilon_start: float = 1.0       # Initial exploration rate
-    epsilon_end: float = 0.01        # Final exploration rate
-    epsilon_decay_steps: int = 100_000
+    learning_rate: float = 5e-5          # was 1e-4 — halved to stop loss divergence
+    gamma: float = 0.99
+    epsilon_start: float = 1.0
+    epsilon_end: float = 0.05            # was 0.01 — matches what Run 2 was using
+    epsilon_decay_steps: int = 1_500_000 # was 100_000 — keeps the Run 2 fix
+    grad_clip: float = 1.0               # ADD THIS LINE — used by dqn_agent.py
     batch_size: int = 64
     replay_buffer_size: int = 100_000
-    target_sync_interval: int = 1_000  # Episodes between target net updates
-    frame_stack: int = 3             # Number of stacked frames
+    target_sync_interval: int = 1_000
+    frame_stack: int = 3
 
 
 @dataclass
