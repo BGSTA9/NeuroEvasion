@@ -10,13 +10,13 @@ MULTI-DISCRETE DQN:
     Both heads are trained simultaneously via separate TD losses but share
     the same CNN backbone (gradient flows back through both heads).
 
-TRAINING LOSSES:
-    L_move = MSE( Q_move(s, move_a),  r + γ * max_a' Q_move_target(s', a') )
-    L_tool = MSE( Q_tool(s, tool_a),  r + γ * max_a' Q_tool_target(s', a') )
-    L_total = L_move + L_tool
-
-    Using the same reward signal r for both heads is intentional: both
-    movement and tool-use choices contribute to the same episode outcome.
+COEVOLUTIONARY FIXES (v2):
+    - Double DQN: policy net selects action, target net evaluates (both heads)
+    - Polyak soft target update (τ=0.005): smooth tracking, no more hard sync
+    - Huber loss replaces MSE: robust to large TD-errors
+    - gradient clipping at max_norm=1.0 (tightened from 10.0)
+    - Cosine-annealing LR scheduler with warm restarts
+    - Cyclic epsilon (inherited from DQNAgent._update_epsilon)
 
 CHECKPOINT COMPATIBILITY:
     get_full_state() / load_full_state() add "move_head" / "tool_head"
@@ -26,6 +26,7 @@ CHECKPOINT COMPATIBILITY:
 
 from __future__ import annotations
 
+import math
 import numpy as np
 import torch
 import torch.nn as nn
@@ -42,15 +43,15 @@ class MultiDiscreteDQNAgent(DQNAgent):
     Deep Q-Network agent for a Multi-Discrete (movement × tool-use) action space.
 
     Inherits from DQNAgent for:
-        - epsilon schedule and _update_epsilon()
+        - epsilon schedule and _update_epsilon() (including cyclic ε)
         - replay buffer management
-        - target network periodic sync
+        - soft_update_target() (Polyak averaging)
         - checkpoint save / load wrappers
 
     Overrides:
         - __init__    — builds dual-head networks instead of single-head
         - select_action → MultiDiscreteAction
-        - train_step  → dual-loss backprop
+        - train_step  → dual-loss backprop with Double DQN
         - get_full_state / load_full_state — multi-head state dicts
 
     Args:
@@ -114,6 +115,14 @@ class MultiDiscreteDQNAgent(DQNAgent):
         # ── Optimizer ───────────────────────────────────────────────────────
         self.optimizer = optim.Adam(
             self.policy_net.parameters(), lr=config.learning_rate
+        )
+
+        # ── LR Scheduler (cosine annealing with warm restarts) ──────────────
+        self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            self.optimizer,
+            T_0=100_000,
+            T_mult=2,
+            eta_min=getattr(config, 'lr_min', 1e-6),
         )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -186,10 +195,14 @@ class MultiDiscreteDQNAgent(DQNAgent):
         """
         Perform one gradient update on the dual-head network.
 
-        MULTI-DISCRETE TD LOSSES:
-            We decode the stored action into (move_a, tool_a).
-            Compute separate Bellman targets using the respective Q-heads
-            of the target network, then sum the two MSE losses.
+        MULTI-DISCRETE DOUBLE DQN LOSSES:
+            For each head (move / tool):
+                1. Policy net selects the best next action:
+                       a* = argmax_a Q_policy_head(s', a)
+                2. Target net evaluates that action:
+                       Q_val = Q_target_head(s', a*)
+                3. TD target: y = r + γ × Q_val × (1 - done)
+                4. Loss: Huber(Q_head(s, a_taken), y)
 
             Total loss = L_move + L_tool
 
@@ -220,22 +233,51 @@ class MultiDiscreteDQNAgent(DQNAgent):
         move_q = move_q_all.gather(1, move_acts.unsqueeze(1)).squeeze(1)
         tool_q = tool_q_all.gather(1, tool_acts.unsqueeze(1)).squeeze(1)
 
-        # ── Target Q-values ────────────────────────────────────────────────
+        # ── Target Q-values (Double DQN) ──────────────────────────────────
         with torch.no_grad():
-            next_move_q, next_tool_q = self.target_net(next_states)
-            # Bellman targets: r + γ * max_a' Q_target(s', a')
-            move_target = rewards + self.config.gamma * next_move_q.max(dim=1)[0] * (1 - dones)
-            tool_target = rewards + self.config.gamma * next_tool_q.max(dim=1)[0] * (1 - dones)
+            use_double = getattr(self.config, 'use_double_dqn', True)
 
-        # ── Combined loss + backprop ───────────────────────────────────────
-        loss_move = nn.functional.mse_loss(move_q, move_target)
-        loss_tool = nn.functional.mse_loss(tool_q, tool_target)
+            if use_double:
+                # Policy net SELECTS the best next actions
+                next_move_q_policy, next_tool_q_policy = self.policy_net(next_states)
+                best_move_acts = next_move_q_policy.argmax(dim=1)
+                best_tool_acts = next_tool_q_policy.argmax(dim=1)
+
+                # Target net EVALUATES those actions
+                next_move_q_target, next_tool_q_target = self.target_net(next_states)
+                next_move_val = next_move_q_target.gather(
+                    1, best_move_acts.unsqueeze(1)).squeeze(1)
+                next_tool_val = next_tool_q_target.gather(
+                    1, best_tool_acts.unsqueeze(1)).squeeze(1)
+            else:
+                # Vanilla DQN fallback
+                next_move_q_target, next_tool_q_target = self.target_net(next_states)
+                next_move_val = next_move_q_target.max(dim=1)[0]
+                next_tool_val = next_tool_q_target.max(dim=1)[0]
+
+            # Bellman targets
+            move_target = rewards + self.config.gamma * next_move_val * (1 - dones)
+            tool_target = rewards + self.config.gamma * next_tool_val * (1 - dones)
+
+        # ── Combined Huber loss + backprop ─────────────────────────────────
+        loss_move = nn.functional.smooth_l1_loss(move_q, move_target)
+        loss_tool = nn.functional.smooth_l1_loss(tool_q, tool_target)
         loss = loss_move + loss_tool
 
         self.optimizer.zero_grad()
         loss.backward()
-        nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=10.0)
+        nn.utils.clip_grad_norm_(
+            self.policy_net.parameters(),
+            max_norm=getattr(self.config, 'grad_clip', 1.0),
+        )
         self.optimizer.step()
+
+        # Step the LR scheduler
+        self.scheduler.step()
+
+        # ── Soft target update (Polyak averaging) ──────────────────────────
+        if getattr(self.config, 'use_soft_target_update', True):
+            self.soft_update_target()
 
         return loss.item()
 
@@ -261,6 +303,7 @@ class MultiDiscreteDQNAgent(DQNAgent):
         }
         if include_optimizer:
             state["optimizer"] = self.optimizer.state_dict()
+            state["scheduler"] = self.scheduler.state_dict()
         return state
 
     def load_full_state(self, state: dict) -> None:
@@ -275,9 +318,16 @@ class MultiDiscreteDQNAgent(DQNAgent):
         self.steps_done = state["steps_done"]
         if "optimizer" in state:
             self.optimizer.load_state_dict(state["optimizer"])
+        if "scheduler" in state:
+            self.scheduler.load_state_dict(state["scheduler"])
 
     def sync_target_network(self) -> None:
-        """Copy policy network weights to target network."""
+        """
+        Hard-copy policy network weights to target network.
+
+        DEPRECATED for coevolutionary training — inherited soft_update_target()
+        is used instead. Kept for backward compatibility.
+        """
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
     def get_q_values(self, state: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

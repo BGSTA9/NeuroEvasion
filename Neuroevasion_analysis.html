@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NeuroEvasion Training Analysis</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#080c10;color:#cdd9e5;font-family:'Courier New',monospace;line-height:1.7}
+body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(57,255,133,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(57,255,133,.03) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;z-index:0}
+.wrap{max-width:1040px;margin:0 auto;padding:0 24px;position:relative;z-index:1}
+.hero{padding:64px 0 48px;border-bottom:1px solid #1e2d3d}
+.tag{font-size:11px;letter-spacing:.3em;color:#39ff85;text-transform:uppercase;margin-bottom:12px;display:flex;align-items:center;gap:10px}
+.tag::before{content:'';width:28px;height:1px;background:#39ff85}
+h1{font-size:clamp(32px,5vw,60px);line-height:1.1;color:#fff;margin-bottom:16px;font-family:Georgia,serif}
+h1 em{font-style:italic;color:#39ff85}
+.sub{font-size:13px;color:#768390;max-width:560px;margin-bottom:32px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;background:#1e2d3d;border:1px solid #1e2d3d;border-radius:2px;overflow:hidden}
+.kpi{background:#0d1117;padding:16px}
+.kl{font-size:10px;letter-spacing:.15em;color:#768390;text-transform:uppercase;margin-bottom:4px}
+.kv{font-size:19px;font-weight:700;color:#39ff85}
+.ks{font-size:11px;color:#768390;margin-top:2px}
+.sec{padding:52px 0;border-bottom:1px solid #1e2d3d}
+.sn{font-size:10px;letter-spacing:.3em;color:#768390;text-transform:uppercase;margin-bottom:6px}
+h2{font-family:Georgia,serif;font-size:clamp(20px,3.5vw,34px);color:#fff;margin-bottom:6px;line-height:1.2}
+.intro{font-size:13px;color:#768390;max-width:640px;margin-bottom:32px;font-style:italic}
+.box{background:#141b24;border:1px solid #1e2d3d;border-left:3px solid #00d4ff;padding:20px 24px;margin:20px 0;border-radius:0 4px 4px 0}
+.box h3{font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:#00d4ff;margin-bottom:8px}
+.box p{font-size:13px;line-height:1.85;color:#cdd9e5}
+.box p+p{margin-top:8px}
+.box-warn{background:#1a1208;border:1px solid #3d2a0a;border-left:3px solid #ffb347;padding:20px 24px;margin:20px 0;border-radius:0 4px 4px 0}
+.box-warn h3{font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:#ffb347;margin-bottom:8px}
+.box-warn p{font-size:13px;line-height:1.85;color:#cdd9e5}
+.box-warn p+p{margin-top:8px}
+.box-alert{background:#1a0808;border:1px solid #3d0a0a;border-left:3px solid #ff4d6d;padding:20px 24px;margin:20px 0;border-radius:0 4px 4px 0}
+.box-alert h3{font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:#ff4d6d;margin-bottom:8px}
+.box-alert p{font-size:13px;line-height:1.85;color:#cdd9e5}
+.box-alert p+p{margin-top:8px}
+.math{background:#080c10;border:1px solid #1e2d3d;padding:13px 16px;margin:12px 0;border-radius:4px;font-size:12px;color:#ffb347;text-align:center;line-height:2}
+.cw{background:#0d1117;border:1px solid #1e2d3d;padding:18px;margin:18px 0;border-radius:4px}
+.ct{font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:#768390;margin-bottom:2px}
+.cd{font-size:11px;color:#768390;margin-bottom:12px;font-style:italic}
+canvas.chart{display:block;width:100%;background:transparent}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:640px){.g2{grid-template-columns:1fr}}
+.cmp{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#1e2d3d;border:1px solid #1e2d3d;border-radius:4px;overflow:hidden;margin:18px 0}
+.cmp3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:#1e2d3d;border:1px solid #1e2d3d;border-radius:4px;overflow:hidden;margin:18px 0}
+@media(max-width:640px){.cmp3{grid-template-columns:1fr}}
+.cs{background:#0d1117;padding:18px}
+.cs h4{font-size:10px;letter-spacing:.15em;text-transform:uppercase;margin-bottom:12px}
+.r1 h4{color:#ff4d6d}.r2 h4{color:#39ff85}.r3 h4{color:#ffb347}
+.cm{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid rgba(30,45,61,.4);font-size:12px}
+.cm:last-child{border-bottom:none}
+.cml{color:#768390}.cmv{font-weight:700}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:20px 0}
+.card{background:#141b24;border:1px solid #1e2d3d;padding:20px;border-radius:4px;position:relative;overflow:hidden}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
+.cg::before{background:#39ff85}.cr::before{background:#ff4d6d}.cc::before{background:#00d4ff}.ca::before{background:#ffb347}
+.ci{font-size:24px;margin-bottom:8px}
+.card h4{font-size:13px;color:#fff;margin-bottom:5px}
+.card p{font-size:12px;color:#768390;line-height:1.7}
+table{width:100%;border-collapse:collapse;font-size:12px;margin:18px 0}
+th{text-align:left;padding:9px 13px;font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:#768390;border-bottom:1px solid #1e2d3d}
+td{padding:9px 13px;border-bottom:1px solid rgba(30,45,61,.4)}
+tr:hover td{background:#141b24}
+.g{color:#39ff85;font-weight:700}.r{color:#ff4d6d;font-weight:700}.a{color:#ffb347;font-weight:700}.c{color:#00d4ff;font-weight:700}.p{color:#c084fc;font-weight:700}
+.tl{position:relative;padding-left:24px;margin:20px 0}
+.tl::before{content:'';position:absolute;left:4px;top:8px;bottom:8px;width:1px;background:linear-gradient(to bottom,#39ff85,#00d4ff,#ffb347,#ff4d6d)}
+.tli{position:relative;margin-bottom:16px;padding:12px 16px;background:#141b24;border:1px solid #1e2d3d;border-radius:4px}
+.tli::before{content:'';position:absolute;left:-21px;top:16px;width:7px;height:7px;border-radius:50%;background:#39ff85;box-shadow:0 0 5px #39ff85}
+.tli.warn::before{background:#ffb347;box-shadow:0 0 5px #ffb347}
+.tli.alert::before{background:#ff4d6d;box-shadow:0 0 5px #ff4d6d}
+.tle{font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:#39ff85;margin-bottom:3px}
+.tle.w{color:#ffb347}.tle.r{color:#ff4d6d}
+.tlt{font-size:12px;color:#cdd9e5}
+.footer{padding:32px 0;text-align:center;font-size:11px;color:#768390}
+</style>
+</head>
+<body>
+<div class="hero"><div class="wrap">
+<div class="tag">NeuroEvasion · Deep Reinforcement Learning · Updated ep 33,500</div>
+<h1>Training <em>Analysis</em> Report</h1>
+<p class="sub">Complete mathematical breakdown of two co-evolutionary DQN training runs. Includes full post-epsilon-floor divergence data through episode 33,500.</p>
+<div class="kpis">
+<div class="kpi"><div class="kl">Total Episodes</div><div class="kv">39,800</div><div class="ks">both runs combined</div></div>
+<div class="kpi"><div class="kl">Run 1 Collapsed</div><div class="kv" style="color:#ff4d6d">Ep 2,300</div><div class="ks">epsilon froze at 0.010</div></div>
+<div class="kpi"><div class="kl">Run 2 ε Floor</div><div class="kv" style="color:#ffb347">Ep 21,700</div><div class="ks">hit 0.050 · predicted ~37,500</div></div>
+<div class="kpi"><div class="kl">Run 2 Win Rate</div><div class="kv" style="color:#00d4ff">26.4%</div><div class="ks">mean · bait dominant post-floor</div></div>
+<div class="kpi"><div class="kl">Run 2 Peak Loss</div><div class="kv" style="color:#ff4d6d">1.165</div><div class="ks">diverging after ep 22,000</div></div>
+</div>
+</div></div>
+
+<div class="sec"><div class="wrap">
+<div class="sn">Section 01</div><h2>What Are We Training?</h2>
+<p class="intro">The full setup in plain English before any numbers.</p>
+<div class="box"><h3>Plain English — The Setup</h3>
+<p>Two AI agents learn against each other in a 20×20 grid. The <strong style="color:#39ff85">Snake 🐍</strong> earns reward by catching the bait as fast as possible. The <strong style="color:#00d4ff">Bait 🎯</strong> earns reward every step it stays alive and loses heavily when caught.</p>
+<p>Both use <strong>Deep Q-Networks (DQN)</strong> — neural networks that learn by playing thousands of games, remembering what worked and gradually building better strategies. This is <strong>co-evolutionary training</strong>: as the snake improves, the bait must adapt, which forces the snake to improve further. A true arms race. The critical requirement: <em>both agents must keep exploring simultaneously</em> — if either one locks in too early, the arms race ends and interesting strategies never emerge.</p>
+</div>
+<div class="cards">
+<div class="card cg"><div class="ci">🐍</div><h4>Snake — 4 Actions</h4><p>Up, Down, Left, Right. Rewarded for catching bait quickly. Penalised every step without a catch.</p></div>
+<div class="card cc"><div class="ci">🎯</div><h4>Bait — 5 Actions</h4><p>Up, Down, Left, Right, Stay. Rewarded every survival step. Heavily penalised when caught.</p></div>
+<div class="card ca"><div class="ci">🧠</div><h4>DQN Algorithm</h4><p>Neural net takes the game grid as input, outputs a quality score (Q-value) for each action. Highest score wins.</p></div>
+<div class="card"><div class="ci">♟️</div><h4>Co-Evolution</h4><p>Neither agent trains against a fixed opponent. Both adapt simultaneously — escalating mutual improvement.</p></div>
+</div>
+</div></div>
+
+<div class="sec"><div class="wrap">
+<div class="sn">Section 02</div><h2>Epsilon (ε) — The Exploration Rate</h2>
+<p class="intro">The single number that determined the arc of both training runs.</p>
+<div class="box"><h3>Plain English — What Is Epsilon?</h3>
+<p>Think of learning chess. Early on you try random moves to discover what works. Later you trust what you have learned. <strong>Epsilon is the probability of making a completely random move</strong> instead of the best known one. ε=1.0 means 100% random. ε=0.05 means 95% exploitation of learned strategy.</p>
+<p><strong>Run 1 disaster:</strong> With decay_steps=100,000 and ~40 steps per game: 100,000÷40 = only 2,500 episodes to hit minimum epsilon. Both agents froze almost immediately — before developing any real strategy. <strong>Run 2:</strong> decay_steps=1,500,000 was intended to delay the floor until episode ~37,500. However, because games in Run 2 lasted much longer (average ~100 steps vs 40), total environment steps accumulated faster. The epsilon floor of 0.050 was actually hit at episode <strong>21,700</strong> — roughly 58% of the way through the run.</p>
+</div>
+<div class="math">ε(t) = ε_end + (ε_start − ε_end) × e^(−t / decay_steps) where t = total environment steps<br>Run 1: floor ep ~2,300 | Run 2: floor ep 21,700 (predicted 37,500 — actual steps/ep were ~100, not ~40)</div>
+<div class="cw"><div class="ct">Epsilon Decay — Full Runs</div><div class="cd">Run 1 (red) hits near-zero almost immediately. Run 2 (green) decays slowly then hits 0.050 floor at ep 21,700 — earlier than predicted because games lasted longer than expected.</div><canvas class="chart" id="eps" height="220"></canvas></div>
+<div class="cmp">
+<div class="cs r1"><h4>❌ Run 1 — Broken</h4>
+<div class="cm"><span class="cml">decay_steps</span><span class="cmv" style="color:#ff4d6d">100,000</span></div>
+<div class="cm"><span class="cml">Epsilon collapsed at</span><span class="cmv" style="color:#ff4d6d">Episode 2,300</span></div>
+<div class="cm"><span class="cml">Final epsilon</span><span class="cmv" style="color:#ff4d6d">0.010</span></div>
+<div class="cm"><span class="cml">% of run exploring</span><span class="cmv" style="color:#ff4d6d">~4.6%</span></div>
+</div>
+<div class="cs r2"><h4>⚠️ Run 2 — Floor Earlier Than Planned</h4>
+<div class="cm"><span class="cml">decay_steps</span><span class="cmv" style="color:#39ff85">1,500,000</span></div>
+<div class="cm"><span class="cml">Epsilon floor at</span><span class="cmv" style="color:#ffb347">Episode 21,700</span></div>
+<div class="cm"><span class="cml">Floor value</span><span class="cmv" style="color:#39ff85">0.050</span></div>
+<div class="cm"><span class="cml">% of 33,500 ep run exploring</span><span class="cmv" style="color:#ffb347">~64%</span></div>
+</div>
+</div>
+</div></div>
+
+<div class="sec"><div class="wrap">
+<div class="sn">Section 03</div><h2>Reward Signals — Are Agents Learning?</h2>
+<p class="intro">Reward is the fundamental learning signal. Every other metric flows from it.</p>
+<div class="box"><h3>Plain English — What Is Reward?</h3>
+<p>After every game each agent gets a total reward score. This is a <strong>zero-sum game</strong> — snake and bait rewards always mirror each other and sum to ~zero. Positive snake reward = snake won that game. Negative = bait survived. The trend over many episodes matters more than any single game.</p>
+<p><strong>Run 1:</strong> Snake reward flips permanently positive at episode ~1,000 and never looks back. The bait is stuck on −10 forever. <strong>Run 2 (eps 100–21,700):</strong> Rewards bounce — sometimes snake ahead, sometimes bait ahead. This oscillation IS the arms race. <strong>Run 2 (eps 21,700–33,500):</strong> After the epsilon floor, the bait's advantage became increasingly systematic. Note the appearance of partial rewards like −2.69 or −3.39 for the snake — these are timeout episodes where the game hit the step limit and neither agent fully won, but the bait received most of the cumulative reward.</p>
+</div>
+<div class="cw"><div class="ct">Snake Reward Per Episode — Both Runs</div><div class="cd">Run 1 (red) permanently positive after ep 1,000. Run 2 (green) oscillates during exploration, then shows bait dominance post ep 21,700 with increasing timeout episodes (partial rewards).</div><canvas class="chart" id="sr" height="220"></canvas></div>
+<div class="g2">
+<div class="cw"><div class="ct">Run 1 — Snake vs Bait</div><div class="cd">Mirror image. Snake dominates from ep 1,000.</div><canvas class="chart" id="r1rv" height="200"></canvas></div>
+<div class="cw"><div class="ct">Run 2 — Snake vs Bait</div><div class="cd">Competing through ep 21,700, then bait dominates.</div><canvas class="chart" id="r2rv" height="200"></canvas></div>
+</div>
+</div></div>
+
+<div class="sec"><div class="wrap">
+<div class="sn">Section 04</div><h2>Win Rate — The Competition Score</h2>
+<p class="intro">The clearest single metric for co-evolutionary health — and the one that revealed the post-floor divergence first.</p>
+<div class="box"><h3>Plain English — What Is Win Rate?</h3>
+<p>Every 100 episodes, win rate shows what percentage of games the snake won. <strong>50% is the ideal co-evolutionary equilibrium</strong> — both agents equally matched, both pushing each other harder. 97–100% means the arms race is over (snake won). Sub-10% means it's over the other way (bait won).</p>
+<p><strong>Run 2, eps 100–10,000:</strong> Gradually climbed from 5% toward 50% — healthy exploration. <strong>Run 2, eps 10,000–21,700:</strong> Oscillated in the 30–54% range — active arms race near equilibrium. <strong>Run 2, eps 21,700+:</strong> Win rate collapsed — from ~35% at the epsilon floor to below 10% by episode 29,500. The bait has locked in an evasion strategy the snake cannot overcome with only 5% exploration.</p>
+</div>
+<div class="math">Win Rate = (Episodes snake caught bait / Window size) × 100 | Ideal equilibrium ≈ 50% ± 15%<br>Run 1: mean 75.9% ± 33.4% | Run 2 (full): mean 26.4% ± 10.8%</div>
+<div class="cw"><div class="ct">Win Rate — Both Runs (Full)</div><div class="cd">Amber dashed line = 50% ideal. Run 1 (red) hits 97–100% and flatlines. Run 2 (green) oscillated near 50% through ep 21,700, then collapsed as bait dominated.</div><canvas class="chart" id="wr" height="240"></canvas></div>
+<div class="cards">
+<div class="card cr"><div class="ci">📉</div><h4>Run 1: Snake Won</h4><p>Win rate hits 91% at ep 2,200. Snake dominated the arms race before the bait developed evasion. Mean: <strong style="color:#ff4d6d">75.9%</strong></p></div>
+<div class="card cc"><div class="ci">⚖️</div><h4>Run 2, eps 10K–21.7K</h4><p>Win rate oscillated 30–54%. Both agents adapting near equilibrium. The healthiest window of training: <strong style="color:#00d4ff">42% avg</strong></p></div>
+<div class="card ca"><div class="ci">📉</div><h4>Run 2, eps 22K–33.5K</h4><p>Win rate dropped from ~35% to below 10%. Bait locked in evasion. Snake unable to adapt at ε=0.050. Mean: <strong style="color:#ffb347">~17%</strong></p></div>
+<div class="card cr"><div class="ci">🔄</div><h4>Different Failure, Same Result</h4><p>Run 1: snake dominates (99%). Run 2: bait dominates (8–13%). Both represent co-evolution collapse — just from opposite sides.</p></div>
+</div>
+</div></div>
+
+<div class="sec"><div class="wrap">
+<div class="sn">Section 05</div><h2>Loss Function — Network Learning Quality</h2>
+<p class="intro">Loss tells you whether the neural network is genuinely learning or entering a degenerate feedback loop — and Run 2 eventually shows both phases.</p>
+<div class="box"><h3>Plain English — What Is Loss?</h3>
+<p>The DQN predicts "if I take action X in state S, I expect reward Y." <strong>Loss is the gap between prediction and reality.</strong> The formula is <strong>Huber Loss</strong> — precise for small errors, capped for large ones. This prevents one catastrophically wrong prediction from crashing all training.</p>
+<p><strong>Run 2, eps 100–18,000 (healthy phase):</strong> Loss rose gradually from 0.07 to ~0.18, reflecting genuinely complex strategies emerging. Normal productive learning. <strong>Run 2, eps 18,000–21,700 (transition):</strong> Loss started climbing more steeply as epsilon dropped and the bait began winning more consistently. The snake's Q-predictions were being invalidated. <strong>Run 2, eps 22,000–33,500 (divergence):</strong> Loss surged from ~0.3 to over 1.16. The snake's network is trying to reconcile its learned pursuit strategy with a bait it can no longer catch — a degenerate reward signal loop similar to Run 1's collapse, but inverted.</p>
+</div>
+<div class="math">Huber: L(δ) = ½δ² when |δ|≤1 | |δ|−½ when |δ|>1 where δ = Q_target − Q_predicted<br>Q_target = r + γ·max Q(s′,a′) | γ=0.99 (discount factor)</div>
+<div class="cw"><div class="ct">Training Loss (Huber) — Both Runs, Full History</div><div class="cd">Run 1 (red) spikes after ep 2,500 — degenerate feedback from frozen epsilon. Run 2 (green) had a healthy low phase, then diverges sharply after ep 22,000 as bait dominance took hold.</div><canvas class="chart" id="ls" height="240"></canvas></div>
+<div class="cmp3">
+<div class="cs r1"><h4>❌ Run 1 Loss</h4>
+<div class="cm"><span class="cml">Mean</span><span class="cmv" style="color:#ff4d6d">0.2252</span></div>
+<div class="cm"><span class="cml">Std Dev</span><span class="cmv" style="color:#ff4d6d">0.1474</span></div>
+<div class="cm"><span class="cml">Peak</span><span class="cmv" style="color:#ff4d6d">0.5678 (ep 3,100)</span></div>
+<div class="cm"><span class="cml">Pattern</span><span class="cmv" style="color:#ff4d6d">Spike → plateau</span></div>
+</div>
+<div class="cs r2"><h4>✅ Run 2 Phase 1 (eps 100–18K)</h4>
+<div class="cm"><span class="cml">Mean</span><span class="cmv" style="color:#39ff85">0.083</span></div>
+<div class="cm"><span class="cml">Std Dev</span><span class="cmv" style="color:#39ff85">0.053</span></div>
+<div class="cm"><span class="cml">Peak</span><span class="cmv" style="color:#39ff85">0.356 (ep 7,100)</span></div>
+<div class="cm"><span class="cml">Pattern</span><span class="cmv" style="color:#39ff85">Gradual rise → stable</span></div>
+</div>
+<div class="cs r3"><h4>⚠️ Run 2 Phase 2 (eps 22K–33.5K)</h4>
+<div class="cm"><span class="cml">Mean</span><span class="cmv" style="color:#ffb347">0.63</span></div>
+<div class="cm"><span class="cml">Std Dev</span><span class="cmv" style="color:#ffb347">0.21</span></div>
+<div class="cm"><span class="cml">Peak</span><span class="cmv" style="color:#ff4d6d">1.165 (ep 33,000)</span></div>
+<div class="cm"><span class="cml">Pattern</span><span class="cmv" style="color:#ff4d6d">Diverging — still climbing</span></div>
+</div>
+</div>
+</div></div>
+
+<div class="sec"><div class="wrap">
+<div class="sn">Section 06</div><h2>Steps Per Episode — Game Duration</h2>
+<p class="intro">Game duration is a proxy for strategic sophistication — and the emergence of 200-step timeout games is the clearest signal of bait dominance.</p>
+<div class="box"><h3>Plain English — What Do Steps Tell Us?</h3>
+<p>Steps = moves before game ends. Short games (5–20 steps) with high win rate = snake found an immediate aggressive route. Long games (100+ steps) = bait successfully evading. <strong>Steps=200 means the game hit the maximum step limit</strong> — the bait survived the entire episode without being caught.</p>
+<p><strong>Run 2, eps 100–12,300:</strong> Games ranged 8–132 steps. High variance. Diverse experience. <strong>Run 2, eps 12,300–21,700:</strong> Games extended further — bait learning to survive longer (steps regularly hitting 100–167). <strong>Run 2, eps 21,700+:</strong> Steps=200 (timeout) became the dominant outcome. By episode 28,000+, the majority of games end with the bait surviving the full 200 steps. The snake cannot corner a bait that has mastered its evasion strategy.</p>
+</div>
+<div class="cw"><div class="ct">Steps Per Episode — Both Runs (Full)</div><div class="cd">Run 1 (red) collapses to uniform short games. Run 2 (green) starts diverse, then from ep 21,700 onward, the 200-step ceiling dominates — bait running out the clock.</div><canvas class="chart" id="st" height="240"></canvas></div>
+<div class="math">Mean Steps — Run 1: 40.9 ± 26.8 | Run 2 full: ~100.4 ± 68.3<br>Run 2 eps 22K–33.5K: ~165 mean — majority of games ending at 200-step limit</div>
+</div></div>
+
+<div class="sec"><div class="wrap">
+<div class="sn">Section 07</div><h2>Co-Evolutionary Dynamics &amp; Volatility</h2>
+<p class="intro">Measuring the arms race mathematically — including when and why it ended.</p>
+<div class="box"><h3>Plain English — Non-Stationarity &amp; The Volatility Collapse</h3>
+<p>In biology, cheetahs and gazelles co-evolved over millions of years — each species improving in response to the other. In ML we replicate this by training agents simultaneously. The key mathematical challenge is <strong>non-stationarity</strong>: the optimal strategy keeps changing because whatever the snake learns, the bait adapts. You cannot simply minimise a fixed loss — the target keeps moving.</p>
+<p>The volatility chart shows the <strong>rolling standard deviation of win rate over 5 checkpoints</strong>. High volatility = active arms race. Low volatility = one agent locked in. Run 2 maintained healthy volatility through the exploration phase (eps 100–21,700). After the epsilon floor, a second volatility collapse occurred — not from snake dominance like Run 1, but from <em>bait</em> dominance. The arms race ended the same way, just in the opposite direction.</p>
+</div>
+<div class="math">F_snake(t) = f(π_snake, π_bait(t)) — snake fitness depends on bait policy which changes every episode<br>Volatility = σ[WinRate(t−w : t)] where w=5 checkpoints — high σ = active arms race</div>
+<div class="cw"><div class="ct">Win Rate Volatility — Rolling 5-pt Std Dev (Full Runs)</div><div class="cd">Run 1 (red) collapses immediately at ep 2,300. Run 2 (green) stays high through exploration, drops briefly, then a second collapse begins around ep 27,000 as bait dominance stabilises.</div><canvas class="chart" id="vol" height="240"></canvas></div>
+<div class="tl">
+<div class="tli"><div class="tle">Episodes 1–1,000 (Both Runs)</div><div class="tlt">Pure exploration. ε≈0.95. Win rate 5–22%, very noisy. Agents discovering that actions have consequences.</div></div>
+<div class="tli"><div class="tle">Episodes 1,000–2,200 (Divergence Begins)</div><div class="tlt">First strategies emerge. Run 1 accelerates to 79% win rate. Run 2 only reaches 17% — still genuinely exploring. The critical fork in the road.</div></div>
+<div class="tli alert"><div class="tle r">Episode 2,300 — RUN 1 COLLAPSE (Snake Wins)</div><div class="tlt">ε hits 0.010. Snake locks in. Win rate jumps to 98% within 100 episodes. Co-evolution ends entirely.</div></div>
+<div class="tli"><div class="tle">Episodes 2,300–10,000 — Run 2 Active Arms Race</div><div class="tlt">Both agents still exploring (ε: 0.94→0.73). Win rate climbs slowly from 6% toward 42%. Snake and bait trading advantages. Healthy oscillation in the 20–50% band.</div></div>
+<div class="tli"><div class="tle">Episodes 10,000–18,000 — Run 2 Near-Equilibrium</div><div class="tlt">ε drops 0.73→0.35. Win rate oscillates 29–54%. Both agents developing systematic strategies. Longest sustained competitive period of either run.</div></div>
+<div class="tli warn"><div class="tle w">Episodes 18,000–21,700 — Transition Phase</div><div class="tlt">ε drops 0.35→0.050. Win rate begins drifting down (38%→18%). Bait starting to develop reproducible evasion. Loss rising faster than before. Early warning signs.</div></div>
+<div class="tli alert"><div class="tle r">Episode 21,700 — RUN 2 EPSILON FLOOR (ε=0.050)</div><div class="tlt">Earlier than predicted (~37,500) because games averaged 100 steps, not 40. Bait evasion strategy now locking in against a snake with only 5% exploration. The arms race is ending.</div></div>
+<div class="tli alert"><div class="tle r">Episodes 22,000–25,000 — Bait Gaining Dominance</div><div class="tlt">Win rate: 22→26%. Loss surges from 0.25 to 0.56. Steps=200 appearing in majority of games. Bait has learned wall-hugging and corner evasion. Snake cannot consistently cut off escape routes.</div></div>
+<div class="tli alert"><div class="tle r">Episodes 25,000–33,500 — COLLAPSE (Bait Wins)</div><div class="tlt">Win rate: 12→8%. Loss: 0.56→1.16. Nearly every game ends in a 200-step timeout. The bait has permanently dominated. Snake cannot adapt at ε=0.050. Arms race over — bait won.</div></div>
+</div>
+</div></div>
+
+<div class="sec"><div class="wrap">
+<div class="sn">Section 08</div><h2>The Post-Floor Divergence — What Went Wrong</h2>
+<p class="intro">Run 2 did not collapse the same way as Run 1. It revealed a second failure mode: bait dominance after epsilon drop.</p>
+<div class="box-alert"><h3>🚨 A New Failure Mode</h3>
+<p>Run 1 failed because the <em>snake</em> stopped exploring and dominated the bait. Run 2 failed because the <em>bait</em> locked in its evasion strategy once epsilon dropped, and the snake — with only 5% exploration — could not overcome it. The system converged to a local equilibrium where the bait always survives to 200 steps.</p>
+<p>This is actually a sign of successful bait training: the bait genuinely learned evasion. But the snake's Q-network is now receiving a degenerate training signal — trying to estimate reward for catching a bait it can almost never catch. This explains the loss divergence (0.07 → 1.16) and the cycling patterns in later win rate data.</p>
+</div>
+<div class="box-warn"><h3>⚠️ Why Did the Floor Hit at ep 21,700 Instead of ~37,500?</h3>
+<p>The prediction of ep ~37,500 assumed ~40 steps per game (from Run 1's average). Run 2's average was approximately 100 steps per game — because the bait was actively evading and games lasted much longer. More steps per episode = faster total step accumulation = faster epsilon decay.</p>
+<p>Calculation: 1,500,000 decay_steps ÷ 100 steps/ep ≈ 15,000 episodes for the e-fold decay point. Combined with the exponential tail, ε≈0.050 was reached at ep ~21,700. This is a reminder that epsilon schedules should be set based on expected game duration, which itself changes as agents improve.</p>
+</div>
+<div class="box"><h3>The Timeout Epidemic — Steps = 200</h3>
+<p>The emergence of 200-step timeout games is the clearest signal of bait dominance. In these episodes, the snake's reward is a partial negative (e.g. −2.69, −3.39) rather than the full −10 to −12 loss, and the bait receives a reduced positive reward. This creates a muddied training signal for both agents. The snake learns neither good pursuit nor good abandonment — it learns an ineffective middle ground. The bait, meanwhile, reinforces whatever it did to survive the full 200 steps.</p>
+</div>
+<div class="cards">
+<div class="card cr"><div class="ci">🐍</div><h4>Snake's Problem</h4><p>With ε=0.050, 95% of moves are deterministic. The snake cannot discover new pursuit strategies to overcome the bait's locked-in evasion.</p></div>
+<div class="card ca"><div class="ci">🎯</div><h4>Bait's Dominance</h4><p>Bait learned wall-hugging and maximising distance. Against the snake's frozen strategy, it wins ~90% of games by episode 30,000.</p></div>
+<div class="card cc"><div class="ci">📊</div><h4>Loss Divergence</h4><p>Loss rose from 0.05 (ep 1,000) to 1.16 (ep 33,000). Q-network predictions are increasingly wrong as the reward signal becomes inconsistent.</p></div>
+<div class="card cg"><div class="ci">🔧</div><h4>Fix for Run 3</h4><p>Higher ε floor (0.15), scheduled exploration resets, adaptive ε based on win rate, or curriculum learning with opponent pools.</p></div>
+</div>
+</div></div>
+
+<div class="sec"><div class="wrap">
+<div class="sn">Section 09</div><h2>Complete Statistical Summary</h2>
+<p class="intro">Every metric, both runs, side by side — updated through episode 33,500.</p>
+<table>
+<thead><tr><th>Metric</th><th>Run 1</th><th>Run 2</th><th>Run 2 Phase 1 (ep 100–21.7K)</th><th>Run 2 Phase 2 (ep 21.7K–33.5K)</th></tr></thead>
+<tbody>
+<tr><td>Episodes logged</td><td>6,300</td><td class="g">33,500</td><td>21,700</td><td>11,800</td></tr>
+<tr><td>Epsilon at end</td><td class="r">0.010 (ep 2,300)</td><td class="a">0.050 (ep 21,700)</td><td class="g">0.998→0.050 (decaying)</td><td class="a">0.050 (frozen)</td></tr>
+<tr><td>Mean Win Rate</td><td class="r">75.9%</td><td class="a">26.4%</td><td class="g">~32%</td><td class="r">~17%</td></tr>
+<tr><td>Win Rate Std Dev</td><td class="r">33.4%</td><td class="g">10.8%</td><td class="g">12.1%</td><td class="r">8.3%</td></tr>
+<tr><td>Mean Loss</td><td class="a">0.2252</td><td class="r">0.288</td><td class="g">0.100</td><td class="r">0.63</td></tr>
+<tr><td>Loss Std Dev</td><td class="r">0.1474</td><td class="r">0.220</td><td class="g">0.065</td><td class="r">0.21</td></tr>
+<tr><td>Peak Loss</td><td class="r">0.568</td><td class="r">1.165 (ep 33,000)</td><td class="a">0.365 (ep 7,100)</td><td class="r">1.165 (diverging)</td></tr>
+<tr><td>Mean Steps</td><td>40.9</td><td class="c">~100.4</td><td>~70</td><td class="r">~163</td></tr>
+<tr><td>Steps Std Dev</td><td>26.8</td><td class="r">68.3</td><td class="c">52</td><td class="r">56</td></tr>
+<tr><td>Timeout games (steps=200)</td><td class="g">Rare</td><td class="r">~45% of all games</td><td class="g">~5%</td><td class="r">~75%+</td></tr>
+<tr><td>Co-evolution active?</td><td class="r">No (after ep 2,300)</td><td class="a">Partially — diverged ep 21,700</td><td class="g">Yes (ongoing)</td><td class="r">No (bait dominant)</td></tr>
+<tr><td>Emergent behaviours?</td><td class="r">Unlikely</td><td class="a">Yes — bait evasion emerged</td><td class="g">Active arms race</td><td class="a">Bait wall-hugging confirmed</td></tr>
+</tbody>
+</table>
+</div></div>
+
+<div class="sec"><div class="wrap">
+<div class="sn">Section 10</div><h2>Run 3 — What To Change</h2>
+<p class="intro">Both runs revealed different failure modes. Run 3 should fix both simultaneously.</p>
+<div class="cards">
+<div class="card ca"><div class="ci">🎯</div><h4>Higher ε Floor (0.15+)</h4><p>ε=0.050 was too low. The snake could not explore new pursuit strategies to overcome the bait's locked evasion. A floor of 0.15 keeps 15% randomness — enough to break local optima.</p></div>
+<div class="card cc"><div class="ci">🔄</div><h4>Win-Rate Adaptive ε</h4><p>If win rate drops below 20% for 500 episodes, temporarily boost ε to 0.3. If win rate exceeds 80%, boost bait ε. Dynamic exploration prevents single-agent lock-in.</p></div>
+<div class="card cg"><div class="ci">📚</div><h4>Opponent Pool</h4><p>Store checkpoint policies from episodes 10K–21K (the healthy co-evolution window). Occasionally sample from this pool rather than always training against the current opponent. Prevents catastrophic forgetting.</p></div>
+<div class="card"><div class="ci">⏱️</div><h4>Step Limit Calibration</h4><p>Cap episodes at 100 steps (not 200) during early training, then gradually increase. This prevents the 200-step timeout from becoming the bait's dominant strategy and keeps the reward signal clean.</p></div>
+</div>
+<div class="box"><h3>The Big Picture — Both Runs Combined</h3>
+<p>Run 1 was a chess match where one player studied for 2 hours and the other for 2 minutes. Run 2 improved this dramatically — both players studied seriously. But Run 2 revealed a new problem: after the study period ended, one player (the bait) remembered the lessons better and locked in a dominant strategy the other (the snake) could no longer overcome with only 5% improvisation. Run 3 needs both longer study periods AND a mechanism to restart the arms race if either side gains permanent dominance. The goal is perpetual co-evolution, not a single winner.</p>
+</div>
+</div></div>
+
+<div class="footer"><div class="wrap">NeuroEvasion Training Analysis · Run 1: 6,300 ep · Run 2: 33,500 ep (complete) · Updated through episode 33,500 · Pure Canvas — no external dependencies</div></div>
+
+<script>
+// ── DATA ─────────────────────────────────────────────────────────────────────
+
+// Run 1 base xs (100 to 6300 by 100)
+const R1_XS = [100,200,300,400,500,600,700,800,900,1000,1100,1200,1300,1400,1500,1600,1700,1800,1900,2000,2100,2200,2300,2400,2500,2600,2700,2800,2900,3000,3100,3200,3300,3400,3500,3600,3700,3800,3900,4000,4100,4200,4300,4400,4500,4600,4700,4800,4900,5000,5100,5200,5300,5400,5500,5600,5700,5800,5900,6000,6100,6200,6300];
+
+// Run 2 xs (100 to 33500 by 100) — generated
+const R2_XS = (function(){const a=[];for(let i=100;i<=33500;i+=100)a.push(i);return a;})();
+
+const R1_EPS = [0.964,0.931,0.889,0.844,0.808,0.762,0.718,0.663,0.608,0.554,0.504,0.457,0.41,0.362,0.317,0.279,0.232,0.192,0.148,0.103,0.057,0.012,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01];
+
+const R2_EPS = [0.998,0.995,0.993,0.991,0.989,0.987,0.985,0.982,0.98,0.977,0.975,0.973,0.971,0.969,0.966,0.964,0.961,0.959,0.957,0.954,0.951,0.949,0.946,0.944,0.941,0.939,0.937,0.934,0.932,0.929,0.926,0.923,0.921,0.918,0.915,0.912,0.91,0.907,0.904,0.901,0.899,0.897,0.894,0.891,0.888,0.885,0.882,0.88,0.877,0.874,0.872,0.869,0.867,0.864,0.861,0.859,0.856,0.853,0.85,0.847,0.844,0.841,0.839,0.836,0.833,0.83,0.828,0.825,0.822,0.82,0.817,0.814,0.811,0.808,0.805,0.803,0.8,0.797,0.794,0.791,0.788,0.785,0.782,0.78,0.776,0.773,0.77,0.767,0.764,0.761,0.757,0.754,0.751,0.748,0.744,0.741,0.738,0.734,0.731,0.728,0.724,0.721,0.718,0.714,0.71,0.707,0.703,0.699,0.695,0.692,0.688,0.685,0.681,0.677,0.673,0.669,0.665,0.662,0.658,0.654,0.65,0.646,0.641,
+0.637,0.633,0.629,0.625,0.620,0.616,0.612,0.607,0.603,0.598,0.594,0.589,0.585,0.580,0.575,0.570,0.565,0.560,0.555,0.550,0.545,0.540,0.535,0.529,0.524,0.519,0.513,0.508,0.503,0.497,0.490,0.485,0.479,0.474,0.468,0.462,0.455,0.449,0.442,0.436,0.430,0.425,0.419,0.413,0.407,0.401,0.395,0.390,0.386,0.382,0.377,0.372,0.366,0.361,0.356,0.351,0.346,0.339,0.332,0.326,0.318,0.311,0.303,0.296,0.288,0.281,0.273,0.265,0.258,0.250,0.242,0.233,0.225,0.217,0.207,0.200,0.191,0.183,0.174,0.166,0.157,0.149,0.141,0.133,0.125,0.116,0.108,0.100,0.092,0.083,0.074,0.064,0.055,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050,0.050];
+
+const R1_WR = [8,8,12,8,9,18,23,5,21,22,33,31,38,39,41,47,52,56,69,67,79,91,98,96,98,98,99,99,99,98,98,98,98,96,96,97,100,100,99,99,99,99,96,98,99,97,98,100,97,98,98,99,97,99,97,97,94,90,94,98,99,98,98];
+
+const R2_WR = [9,8,12,4,11,8,15,5,7,8,5,13,12,9,8,6,12,14,10,8,13,10,6,12,17,6,10,11,12,11,15,9,16,12,15,6,13,16,14,20,12,13,16,18,20,16,18,18,14,15,24,14,22,27,20,15,18,22,27,22,28,19,24,24,26,35,27,19,27,25,31,27,38,29,35,25,30,31,37,39,42,37,27,43,42,42,44,38,43,37,34,54,43,45,37,48,43,48,49,42,48,48,38,38,52,35,45,35,43,47,34,41,39,40,42,36,45,43,50,39,39,43,33,
+46,32,38,41,44,41,41,41,48,42,48,44,43,55,56,45,39,35,45,37,49,34,43,37,38,49,40,37,35,40,34,30,35,39,34,40,36,36,36,35,41,36,40,39,32,33,40,45,30,44,42,37,46,41,39,38,39,29,23,34,30,31,30,29,26,38,28,27,31,24,29,25,23,29,24,33,19,31,27,22,19,28,29,32,31,34,26,34,31,27,32,19,32,18,23,22,24,22,31,37,33,34,37,45,35,32,36,35,42,38,33,27,32,29,32,35,30,22,26,29,22,18,29,26,35,22,26,27,26,12,17,24,18,27,14,16,18,31,20,21,19,28,18,24,26,22,26,20,21,17,23,15,12,20,16,10,13,16,13,20,15,16,22,18,9,22,13,13,21,15,12,9,8,9,10,13,10,11,20,18,21,20,18,13,22,15,12,16,14,13,17,16,10,8,11,10,13,15,10,11,14,11,18,11,12,12,11,13,12,7,9,13];
+
+const R1_SR = [-9.66,-10.54,-10.84,-10.38,-10.57,-10.83,-10.7,-11.45,-10.07,10.43,-12.02,10.29,-10.55,-10.06,-10.12,10.12,10.29,10.31,10.42,10.51,10.92,10.3,10.67,10.45,10.67,10.71,10.66,10.74,10.4,10.5,10.45,10.4,10.48,10.49,10.75,9.97,10.56,10.49,10.51,9.84,10.63,10.59,10.38,10.55,10.57,10.4,10.32,10.61,10.42,10.3,10.45,10.31,10.41,10.27,10.27,10.58,10.28,10.47,10.43,10.71,10.57,10.3,10.28];
+
+const R2_SR = [9.89,10.21,-10.81,-10.33,-10.66,-10.96,-10.6,-11.22,-10.7,-10.91,-10.36,-10.93,-10.93,10.5,-10.22,-10.81,-9.86,-10.67,9.41,10.22,-11.15,-11.6,-10.22,-11.31,10.15,-11.02,-10.74,-10.64,-10.79,-10.8,-10.66,-10.38,-10.85,-10.7,10.26,-10.28,-10.85,10.35,-11.2,10.06,10.29,-10.84,10.29,-10.81,-10.05,-10.76,-10.65,-10.41,-12.15,-10.53,-11.07,10.09,-11.06,9.84,-10.66,-10.17,-9.82,-12.13,-10.35,-11.31,10.08,-10.93,-10.88,-10.71,9.84,10.35,-10.02,-10.16,-11.24,10.3,-10.44,-10.15,10.27,9.78,-10.41,-10.28,-10.95,10.28,10.32,10.26,9.97,-10.76,-10.48,9.89,-9.96,9.67,10.17,9.99,-10.59,-10.35,9.45,9.76,-11.0,-10.18,10.31,10.38,10.28,-11.44,10.12,-10.27,-10.81,-10.44,-10.23,10.36,9.97,10.21,9.2,9.94,-10.4,10.49,-10.21,-9.78,-10.69,9.74,-9.83,-10.22,-10.09,-10.32,10.18,-10.25,-10.66,10.25,-10.27,
+-10.41,-10.39,-10.44,10.30,-10.35,-9.73,-10.11,-10.44,-10.19,-10.52,-11.65,10.16,9.47,10.14,-10.34,-10.39,10.17,-9.93,-10.45,-10.19,9.77,-10.72,10.26,-3.39,9.83,-10.42,-11.29,9.24,-10.65,-10.61,-2.49,-10.60,-11.05,-10.57,-2.69,9.61,-9.81,10.16,9.46,9.04,-10.33,10.07,9.33,9.68,10.17,10.08,-10.14,10.34,-10.75,-10.40,10.07,-10.69,10.17,-10.90,-10.59,-2.09,-10.38,-9.86,-11.46,-3.09,9.17,-10.41,-10.08,-2.89,-10.53,10.11,-10.68,-2.49,-2.99,-11.23,-11.42,-2.39,-10.47,-12.09,-2.99,9.35,-10.71,-2.69,-10.30,-2.79,-10.93,9.10,-11.02,-2.49,9.90,9.56,-10.25,9.63,-11.31,-10.34,-3.69,-2.69,-3.09,-2.69,9.79,-10.58,-3.19,-2.39,9.95,-10.69,-2.49,-10.74,-2.59,9.81,10.04,-3.49,-3.29,-3.59,-10.59,10.11,-10.47,-2.29,-2.19,9.88,-2.39,-11.26,-2.19,-2.19,-2.69,-1.69,-10.75,-2.99,9.80,9.79,-10.24,-11.58,10.24,-2.69,-2.19,-10.73,-2.99,9.91,9.71,-11.78,9.57,-2.39,-2.59,-2.49,9.67,-10.32,9.82,-11.66,-2.19,-2.39,-11.73,-2.89,-10.67,-10.51,-2.49,-10.68,-2.29,-10.28,-3.19,-3.19,-10.18,-2.99,-2.89,-10.62,-10.94,-2.79,-2.39,9.60,-3.69,-3.09,-11.41,-3.69,-10.72,-1.89,-11.17,9.00,-2.59,-2.79,-3.19,-3.39,-10.61,-3.79,-2.69,-2.99,-2.49,-10.53,8.63,-2.79,-3.19,-10.32,8.93,-11.11,8.88,-3.29,-2.59,-2.09,-3.49,-2.79,8.72,-11.35,-3.39,-2.59,-3.19,-2.99,8.69,-3.69,-2.49,-3.19,-3.29,-3.09,-10.89,-2.79,-11.08,-11.33,-2.29,-2.79,8.16,-11.09];
+
+const R1_LOSS = [0.054,0.1217,0.0286,0.0284,0.0219,0.0195,0.0645,0.014,0.0508,0.0258,0.0952,0.1102,0.0935,0.0642,0.0416,0.0738,0.0622,0.032,0.0289,0.0399,0.2543,0.177,0.1723,0.1856,0.0908,0.2199,0.2024,0.1376,0.1844,0.1833,0.5678,0.3771,0.2794,0.2714,0.3114,0.2851,0.2777,0.3021,0.267,0.2889,0.5636,0.4259,0.3945,0.3502,0.3116,0.2963,0.3706,0.3086,0.2881,0.3854,0.5659,0.3769,0.4256,0.3393,0.3305,0.36,0.2809,0.2461,0.2427,0.3175,0.3732,0.2931,0.2321];
+
+const R2_LOSS = [0.0738,0.0208,0.0194,0.0134,0.0252,0.0208,0.0595,0.0199,0.0209,0.0113,0.066,0.0294,0.0314,0.027,0.0377,0.0226,0.0266,0.0437,0.0212,0.0173,0.1474,0.0623,0.0312,0.0334,0.0326,0.0226,0.0404,0.0379,0.0265,0.0292,0.1127,0.0917,0.068,0.0672,0.046,0.0408,0.0395,0.028,0.0272,0.0339,0.1311,0.1134,0.0706,0.0672,0.0764,0.0506,0.0548,0.0807,0.054,0.0448,0.2318,0.1376,0.1006,0.0902,0.0586,0.1186,0.077,0.0809,0.0803,0.0648,0.2769,0.2199,0.1464,0.1342,0.1289,0.1121,0.1168,0.1207,0.1264,0.1485,0.3561,0.2274,0.185,0.1608,0.1548,0.1959,0.1465,0.1612,0.1608,0.1365,0.3345,0.2629,0.2144,0.1763,0.1696,0.1786,0.1602,0.1557,0.1596,0.1966,0.3673,0.2273,0.1932,0.194,0.1578,0.1822,0.1475,0.1409,0.1493,0.1391,0.3264,0.2082,0.1781,0.1523,0.1611,0.1458,0.139,0.1275,0.1422,0.1337,0.2962,0.185,0.185,0.1373,0.136,0.119,0.1259,0.1334,0.1266,0.1266,0.2093,0.1379,0.1312,
+0.1148,0.0970,0.0917,0.1007,0.1253,0.0971,0.0879,0.1582,0.1053,0.0812,0.0742,0.0621,0.0613,0.0715,0.0669,0.0638,0.0628,0.1273,0.0775,0.1024,0.0669,0.0504,0.0623,0.0506,0.0838,0.0499,0.0520,0.1238,0.0866,0.0674,0.0506,0.0627,0.0464,0.0932,0.0694,0.0675,0.0867,0.1183,0.0758,0.0786,0.0781,0.0635,0.0490,0.0668,0.0966,0.0498,0.0856,0.1362,0.1838,0.0704,0.0588,0.0678,0.0516,0.0602,0.0518,0.0668,0.0446,0.0934,0.0946,0.0732,0.0933,0.1241,0.0778,0.0931,0.0926,0.1803,0.1660,0.1571,0.1305,0.1046,0.1483,0.1551,0.2026,0.2019,0.1361,0.1175,0.1726,0.2191,0.1840,0.1788,0.1418,0.1502,0.1751,0.1941,0.1856,0.1895,0.2619,0.2788,0.1937,0.3651,0.2315,0.2819,0.2098,0.2598,0.2353,0.1550,0.2502,0.4528,0.4196,0.2860,0.2801,0.2677,0.2697,0.2952,0.2051,0.2782,0.2905,0.3565,0.3385,0.2253,0.2827,0.2622,0.2525,0.2781,0.2815,0.2991,0.2546,0.4666,0.3853,0.3482,0.2620,0.3582,0.3703,0.4650,0.4262,0.4175,0.5587,0.5691,0.4922,0.5611,0.3858,0.5269,0.5308,0.5274,0.6007,0.5041,0.5291,0.7405,0.5172,0.5762,0.5920,0.4969,0.5518,0.4909,0.5526,0.5074,0.4925,0.6936,0.5808,0.5136,0.5794,0.7465,0.5252,0.5546,0.6858,0.6272,0.5602,0.6492,0.7787,0.6638,0.5414,0.7070,0.5436,0.6416,0.7745,0.6491,0.6325,0.8480,0.7065,0.6787,0.7175,0.6433,0.6459,0.7084,0.4628,0.6475,0.6415,0.7637,0.6595,0.7501,0.6827,0.7393,0.7951,0.6245,0.8408,0.8209,0.7588,0.9142,0.7666,0.8796,0.6715,0.9669,0.8131,0.9313,0.7438,0.9024,0.8428,0.8910,1.0216,0.8734,0.9504,0.8241,1.1469,0.7267,1.1195,0.9481,1.1655,0.9219,0.8602,1.1042,0.8708,0.8110];
+
+const R1_STEPS = [57,45,25,39,38,64,21,96,28,28,103,22,66,117,43,69,62,30,19,30,39,41,14,16,14,20,15,27,31,31,56,31,23,62,26,124,25,22,30,147,28,22,33,26,24,41,39,20,19,51,46,30,30,44,44,33,33,24,38,20,44,51,43];
+
+const R2_STEPS = [52,20,22,24,77,27,11,33,51,12,27,24,54,51,33,12,27,8,110,29,56,81,23,62,36,43,35,15,60,31,37,19,36,41,35,49,86,16,71,75,22,35,22,122,36,47,16,22,106,44,48,42,67,97,17,18,23,104,16,132,53,44,19,42,67,26,53,27,85,11,35,86,24,63,72,29,106,13,39,25,44,17,109,52,67,54,34,62,40,76,96,75,61,69,10,23,43,35,39,48,82,55,24,35,44,40,131,67,101,12,52,39,10,87,54,53,50,43,43,46,27,16,68,
+62,90,35,61,36,34,42,95,20,63,146,35,134,57,75,90,34,24,26,80,134,113,45,200,88,23,60,167,116,112,200,81,126,28,200,170,52,35,125,157,84,34,108,103,44,63,55,27,36,11,64,70,54,141,100,200,79,57,197,200,114,72,59,200,94,50,59,200,200,174,103,200,88,160,200,126,52,200,131,200,114,151,163,200,71,145,96,108,92,15,200,200,200,200,92,69,200,200,66,200,200,85,200,120,87,200,200,200,30,90,78,200,200,133,200,137,200,200,200,200,106,200,91,82,35,159,17,200,200,64,200,80,80,189,84,200,200,200,94,103,179,197,200,200,194,200,28,52,200,99,200,69,200,200,49,200,200,103,75,200,200,111,200,200,62,200,73,200,198,161,200,200,200,200,52,200,200,200,200,164,198,200,200,33,168,182,183,200,200,200,200,200,159,146,200,200,200,200,192,200,200,200,200,200,50,200,104,200,200,185,90];
+
+// Utility: rolling std dev (window w)
+function rollingStd(ys, w) {
+  return ys.map((_, i) => {
+    if (i < w - 1) return null;
+    const win = ys.slice(i - w + 1, i + 1);
+    const mean = win.reduce((a,b) => a+b, 0) / w;
+    const variance = win.reduce((a,b) => a+(b-mean)**2, 0) / w;
+    return Math.sqrt(variance);
+  });
+}
+
+// ── CHART DEFINITIONS ────────────────────────────────────────────────────────
+const CHARTS = {
+  eps: { title:'Epsilon Decay', ylabel:'Epsilon (ε)',
+    series:[
+      {label:'Run 1',color:'#ff4d6d',xs:R1_XS,ys:R1_EPS},
+      {label:'Run 2',color:'#39ff85',xs:R2_XS,ys:R2_EPS}
+    ]},
+  wr: { title:'Win Rate (%)', ylabel:'Win Rate %',
+    series:[
+      {label:'Run 1',color:'#ff4d6d',xs:R1_XS,ys:R1_WR},
+      {label:'Run 2',color:'#39ff85',xs:R2_XS,ys:R2_WR},
+      {label:'Ideal 50%',color:'#ffb347',dash:true,xs:R2_XS,ys:R2_XS.map(()=>50)}
+    ]},
+  sr: { title:'Snake Reward Per Episode', ylabel:'Reward',
+    series:[
+      {label:'Run 1',color:'#ff4d6d',xs:R1_XS,ys:R1_SR},
+      {label:'Run 2',color:'#39ff85',xs:R2_XS,ys:R2_SR}
+    ]},
+  r1rv: { title:'Run 1 — Snake vs Bait Reward', ylabel:'Reward',
+    series:[
+      {label:'Snake',color:'#39ff85',xs:R1_XS,ys:R1_SR},
+      {label:'Bait', color:'#ff4d6d',xs:R1_XS,ys:R1_SR.map(v=>-v)}
+    ]},
+  r2rv: { title:'Run 2 — Snake vs Bait Reward', ylabel:'Reward',
+    series:[
+      {label:'Snake',color:'#39ff85',xs:R2_XS,ys:R2_SR},
+      {label:'Bait', color:'#00d4ff',xs:R2_XS,ys:R2_SR.map(v=>-v)}
+    ]},
+  ls: { title:'Training Loss (Huber)', ylabel:'Loss',
+    series:[
+      {label:'Run 1',color:'#ff4d6d',xs:R1_XS,ys:R1_LOSS},
+      {label:'Run 2',color:'#39ff85',xs:R2_XS,ys:R2_LOSS}
+    ]},
+  st: { title:'Steps Per Episode', ylabel:'Steps',
+    series:[
+      {label:'Run 1',color:'#ff4d6d',xs:R1_XS,ys:R1_STEPS},
+      {label:'Run 2',color:'#39ff85',xs:R2_XS,ys:R2_STEPS}
+    ]},
+  vol: { title:'Win Rate Volatility — Rolling 5-pt Std Dev', ylabel:'Std Dev',
+    series:[
+      {label:'Run 1',color:'#ff4d6d',xs:R1_XS,ys:rollingStd(R1_WR,5)},
+      {label:'Run 2',color:'#39ff85',xs:R2_XS,ys:rollingStd(R2_WR,5)}
+    ]},
+};
+
+// ── CHART ENGINE ─────────────────────────────────────────────────────────────
+function drawChart(id, cfg) {
+  const canvas = document.getElementById(id);
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.offsetWidth || canvas.parentElement.offsetWidth || 800;
+  const H = parseInt(canvas.getAttribute('height')) || 220;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const PAD = {top:20,right:20,bottom:38,left:56};
+  const cW = W - PAD.left - PAD.right;
+  const cH = H - PAD.top  - PAD.bottom;
+
+  let allX=[], allY=[];
+  cfg.series.forEach(s => s.xs.forEach((x,i) => {
+    if (s.ys[i] != null) { allX.push(x); allY.push(s.ys[i]); }
+  }));
+  const xMin = Math.min(...allX), xMax = Math.max(...allX);
+  let yMin = Math.min(...allY), yMax = Math.max(...allY);
+  const yPad = (yMax-yMin)*0.08 || 1;
+  yMin -= yPad; yMax += yPad;
+
+  const toX = x => PAD.left + (x-xMin)/(xMax-xMin)*cW;
+  const toY = y => PAD.top  + (1-(y-yMin)/(yMax-yMin))*cH;
+
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0,0,W,H);
+
+  ctx.strokeStyle = 'rgba(30,45,61,0.8)';
+  ctx.lineWidth = 1;
+  for (let i=0;i<=5;i++) {
+    const y = yMin+(yMax-yMin)*i/5;
+    const py = toY(y);
+    ctx.beginPath(); ctx.moveTo(PAD.left,py); ctx.lineTo(PAD.left+cW,py); ctx.stroke();
+    ctx.fillStyle='#768390'; ctx.font='10px Courier New'; ctx.textAlign='right';
+    const label = Math.abs(y)<0.01 ? y.toFixed(3) : (Math.abs(y)<1 ? y.toFixed(2) : y.toFixed(0));
+    ctx.fillText(label, PAD.left-6, py+4);
+  }
+  for (let i=0;i<=6;i++) {
+    const x = xMin+(xMax-xMin)*i/6;
+    const px = toX(x);
+    ctx.beginPath(); ctx.moveTo(px,PAD.top); ctx.lineTo(px,PAD.top+cH); ctx.stroke();
+    ctx.fillStyle='#768390'; ctx.font='10px Courier New'; ctx.textAlign='center';
+    ctx.fillText(Math.round(x).toLocaleString(), px, PAD.top+cH+18);
+  }
+
+  if (yMin<0 && yMax>0) {
+    const py=toY(0);
+    ctx.strokeStyle='rgba(118,131,144,0.4)'; ctx.setLineDash([4,4]);
+    ctx.beginPath(); ctx.moveTo(PAD.left,py); ctx.lineTo(PAD.left+cW,py); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Vertical marker at ep 21700 for Run 2 charts
+  if (xMax >= 21700 && xMin <= 21700) {
+    const px = toX(21700);
+    ctx.strokeStyle='rgba(255,183,71,0.3)'; ctx.setLineDash([3,5]);
+    ctx.beginPath(); ctx.moveTo(px,PAD.top); ctx.lineTo(px,PAD.top+cH); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle='rgba(255,183,71,0.5)'; ctx.font='9px Courier New'; ctx.textAlign='center';
+    ctx.fillText('ε floor', px, PAD.top+9);
+  }
+
+  cfg.series.forEach(s => {
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = s.dash ? 1.5 : 1.8;
+    if (s.dash) ctx.setLineDash([7,5]); else ctx.setLineDash([]);
+
+    if (!s.dash) {
+      ctx.beginPath();
+      let first=true, lastX=s.xs[0], lastY=null;
+      for (let i=0;i<s.xs.length;i++) {
+        if (s.ys[i]==null){first=true;continue;}
+        const px=toX(s.xs[i]),py=toY(s.ys[i]);
+        if(first){ctx.moveTo(px,py);first=false;}else ctx.lineTo(px,py);
+        lastX=s.xs[i]; lastY=s.ys[i];
+      }
+      ctx.lineTo(toX(lastX),toY(yMin));
+      ctx.lineTo(toX(s.xs[0]),toY(yMin));
+      ctx.closePath();
+      const h=s.color,r=parseInt(h.slice(1,3),16),g=parseInt(h.slice(3,5),16),b=parseInt(h.slice(5,7),16);
+      ctx.fillStyle=`rgba(${r},${g},${b},0.05)`; ctx.fill();
+    }
+
+    ctx.beginPath();
+    let first=true;
+    for(let i=0;i<s.xs.length;i++){
+      if(s.ys[i]==null){first=true;continue;}
+      const px=toX(s.xs[i]),py=toY(s.ys[i]);
+      if(first){ctx.moveTo(px,py);first=false;}else ctx.lineTo(px,py);
+    }
+    ctx.stroke(); ctx.setLineDash([]);
+  });
+
+  ctx.strokeStyle='#1e2d3d'; ctx.lineWidth=1;
+  ctx.strokeRect(PAD.left,PAD.top,cW,cH);
+
+  let lx=PAD.left;
+  cfg.series.forEach(s=>{
+    ctx.fillStyle=s.color; ctx.fillRect(lx,PAD.top+cH+24,12,2);
+    ctx.fillStyle='#768390'; ctx.font='10px Courier New'; ctx.textAlign='left';
+    ctx.fillText(s.label,lx+16,PAD.top+cH+27);
+    lx+=ctx.measureText(s.label).width+36;
+  });
+
+  ctx.save(); ctx.translate(13,PAD.top+cH/2); ctx.rotate(-Math.PI/2);
+  ctx.fillStyle='#768390'; ctx.font='10px Courier New'; ctx.textAlign='center';
+  ctx.fillText(cfg.ylabel,0,0); ctx.restore();
+}
+
+function initCharts(){Object.keys(CHARTS).forEach(id=>drawChart(id,CHARTS[id]));}
+if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',initCharts);}else{initCharts();}
+window.addEventListener('resize',initCharts);
+</script>
+</body>
+</html>

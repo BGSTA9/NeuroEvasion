@@ -8,6 +8,15 @@ THE CO-EVOLUTION PROCESS:
     4. As one gets better, it forces the other to adapt
     5. This creates an arms race of increasingly sophisticated strategies
 
+COEVOLUTIONARY FIXES (v2):
+    - Soft target update (Polyak τ) replaces hard sync every N episodes.
+    - Cyclic ε-greedy exploration prevents policy crystallisation.
+    - Historical opponent pool (30% of episodes) stabilises coevolution.
+    - Running reward normalisation keeps gradient magnitudes in check.
+    - Reward clipping prevents extreme TD-error spikes.
+    - Double DQN (in dqn_agent.py) corrects Q-value overestimation.
+    - GroupNorm (in networks.py) replaces BatchNorm for non-stationary robustness.
+
 EMERGENT BEHAVIORS YOU MAY OBSERVE:
     - Snake learns to "corner" the bait against walls
     - Bait learns to run along walls to maximize escape routes
@@ -19,9 +28,6 @@ MULTI-DISCRETE MODE:
     are instantiated as MultiDiscreteDQNAgent (dual-head policy). All
     other training mechanics — checkpointing, logging, epsilon decay,
     target sync — are identical.
-
-    Tool selection frequencies are accumulated per episode and passed to
-    the logger as `tool_counts` for TensorBoard + CSV analysis.
 
 CHECKPOINT & RESUME:
     Training is automatically resumed from the latest checkpoint if one exists.
@@ -54,6 +60,8 @@ from environment.env import NeuroEvasionEnv
 from agents.dqn_agent import DQNAgent
 from training.logger import TrainingLogger
 from training.checkpoint_manager import CheckpointManager
+from training.reward_normalizer import RewardNormalizer
+from training.opponent_pool import OpponentPool
 from utils import set_global_seed
 from game.actions import SNAKE_TOOL_LABELS, BAIT_TOOL_LABELS
 
@@ -142,6 +150,19 @@ def train(config: Config) -> None:
     mode_label = "MULTI-DISCRETE" if is_multi_discrete else "SINGLE-DISCRETE"
 
     # ─────────────────────────────────────────────────────────────────────────
+    #  Coevolutionary stabilisers
+    # ─────────────────────────────────────────────────────────────────────────
+    coevo = config.coevolution
+
+    snake_reward_norm = RewardNormalizer(clip=coevo.reward_clip)
+    bait_reward_norm  = RewardNormalizer(clip=coevo.reward_clip)
+
+    snake_opponent_pool = OpponentPool(
+        pool_size=coevo.pool_size, current_prob=coevo.pool_current_prob)
+    bait_opponent_pool = OpponentPool(
+        pool_size=coevo.pool_size, current_prob=coevo.pool_current_prob)
+
+    # ─────────────────────────────────────────────────────────────────────────
     #  Checkpoint manager
     # ─────────────────────────────────────────────────────────────────────────
     ckpt_cfg = config.checkpoint
@@ -172,6 +193,16 @@ def train(config: Config) -> None:
         total_games   = meta.get("total_games", 0)
         log_dir       = meta.get("log_dir", log_dir)
 
+        # Restore coevolutionary state if present
+        if "snake_reward_norm" in meta:
+            snake_reward_norm.load_state(meta["snake_reward_norm"])
+        if "bait_reward_norm" in meta:
+            bait_reward_norm.load_state(meta["bait_reward_norm"])
+        if "snake_opponent_pool" in meta:
+            snake_opponent_pool.load_state(meta["snake_opponent_pool"])
+        if "bait_opponent_pool" in meta:
+            bait_opponent_pool.load_state(meta["bait_opponent_pool"])
+
         print(f"\n{'=' * 60}")
         print(f"  ▶️  RESUMING from episode {meta['episode']:,d}")
         print(f"  Mode:        {mode_label}")
@@ -179,6 +210,8 @@ def train(config: Config) -> None:
         print(f"  Log dir:     {log_dir}")
         print(f"  ε (epsilon): {snake_agent.epsilon:.4f}")
         print(f"  Steps done:  {snake_agent.steps_done:,d}")
+        print(f"  Opponent pool: Snake={len(snake_opponent_pool)}, "
+              f"Bait={len(bait_opponent_pool)}")
         print(f"{'=' * 60}\n")
 
         logger = TrainingLogger.resume_from(log_dir, start_episode=start_episode)
@@ -205,6 +238,12 @@ def train(config: Config) -> None:
               f"({', '.join(BAIT_TOOL_LABELS.values())})")
     print(f"  Batch size:     {config.agent.batch_size}")
     print(f"  LR:             {config.agent.learning_rate}")
+    print(f"  Double DQN:     {config.agent.use_double_dqn}")
+    print(f"  Soft tau:       {config.agent.target_update_tau}")
+    print(f"  Cyclic ε:       {config.agent.epsilon_cycle}")
+    print(f"  Opponent pool:  {coevo.use_opponent_pool} "
+          f"(size={coevo.pool_size}, current%={coevo.pool_current_prob:.0%})")
+    print(f"  Reward norm:    {coevo.reward_normalize}")
     print(f"  Seed:           {config.seed}")
     print(f"  Save every:     {ckpt_cfg.interval:,} episodes  "
           f"(keep last {ckpt_cfg.keep_last_n})")
@@ -217,6 +256,18 @@ def train(config: Config) -> None:
     # ─────────────────────────────────────────────────────────────────────────
     _state = {"current_episode": start_episode, "saved": False}
 
+    def _build_training_meta() -> dict:
+        """Build the full training metadata dict for checkpointing."""
+        return {
+            "log_dir":             log_dir,
+            "snake_wins":          snake_wins,
+            "total_games":         total_games,
+            "snake_reward_norm":   snake_reward_norm.get_state(),
+            "bait_reward_norm":    bait_reward_norm.get_state(),
+            "snake_opponent_pool": snake_opponent_pool.get_state(),
+            "bait_opponent_pool":  bait_opponent_pool.get_state(),
+        }
+
     def _emergency_save(signum, frame):
         ep = _state["current_episode"]
         print(f"\n⚠️  Signal {signum} received at episode {ep:,d} — "
@@ -226,11 +277,7 @@ def train(config: Config) -> None:
                 episode=ep,
                 snake_agent=snake_agent,
                 bait_agent=bait_agent,
-                training_meta={
-                    "log_dir":     log_dir,
-                    "snake_wins":  snake_wins,
-                    "total_games": total_games,
-                },
+                training_meta=_build_training_meta(),
             )
             logger.close()
             print(f"  ✅ Emergency checkpoint saved.  "
@@ -261,6 +308,31 @@ def train(config: Config) -> None:
         snake_tool_counts: dict[str, int] = {n: 0 for n in SNAKE_TOOL_LABELS.values()}
         bait_tool_counts:  dict[str, int] = {n: 0 for n in BAIT_TOOL_LABELS.values()}
 
+        # ── Opponent pool: occasionally play against a historical snapshot ──
+        using_historical_snake = False
+        using_historical_bait  = False
+        original_snake_policy = None
+        original_bait_policy  = None
+
+        if coevo.use_opponent_pool:
+            # 30% chance: load a historical bait for the snake to play against
+            if bait_opponent_pool.should_use_historical():
+                using_historical_bait = True
+                original_bait_policy = {k: v.clone() for k, v in
+                                        bait_agent.policy_net.state_dict().items()}
+                bait_agent.policy_net.load_state_dict(
+                    bait_opponent_pool.get_random_snapshot()
+                )
+
+            # 30% chance: load a historical snake for the bait to play against
+            if snake_opponent_pool.should_use_historical():
+                using_historical_snake = True
+                original_snake_policy = {k: v.clone() for k, v in
+                                         snake_agent.policy_net.state_dict().items()}
+                snake_agent.policy_net.load_state_dict(
+                    snake_opponent_pool.get_random_snapshot()
+                )
+
         for step in range(config.game.max_steps):
             snake_action = snake_agent.select_action(snake_obs)
             bait_action  = bait_agent.select_action(bait_obs)
@@ -274,20 +346,46 @@ def train(config: Config) -> None:
                 snake_tool_counts[s_tool] = snake_tool_counts.get(s_tool, 0) + 1
                 bait_tool_counts[b_tool]  = bait_tool_counts.get(b_tool, 0) + 1
 
-            snake_agent.store_transition(
-                snake_obs, snake_action, snake_reward, snake_obs_next, done)
-            bait_agent.store_transition(
-                bait_obs,  bait_action,  bait_reward,  bait_obs_next,  done)
+            # ── Reward clipping ────────────────────────────────────────────
+            snake_reward = max(-coevo.reward_clip,
+                               min(coevo.reward_clip, snake_reward))
+            bait_reward  = max(-coevo.reward_clip,
+                               min(coevo.reward_clip, bait_reward))
 
-            s_loss = snake_agent.train_step()
-            b_loss = bait_agent.train_step()
+            # ── Reward normalisation ───────────────────────────────────────
+            if coevo.reward_normalize:
+                norm_snake_r = snake_reward_norm.normalize(snake_reward)
+                norm_bait_r  = bait_reward_norm.normalize(bait_reward)
+            else:
+                norm_snake_r = snake_reward
+                norm_bait_r  = bait_reward
 
-            if s_loss is not None:
-                ep_snake_loss += s_loss
+            # Store normalised rewards in replay buffer (only for the
+            # agent whose policy is LIVE, not the historical snapshot)
+            if not using_historical_snake:
+                snake_agent.store_transition(
+                    snake_obs, snake_action, norm_snake_r, snake_obs_next, done)
+            if not using_historical_bait:
+                bait_agent.store_transition(
+                    bait_obs, bait_action, norm_bait_r, bait_obs_next, done)
+
+            # ── Training steps ─────────────────────────────────────────────
+            if not using_historical_snake:
+                s_loss = snake_agent.train_step()
+            else:
+                s_loss = None
+
+            if not using_historical_bait:
+                b_loss = bait_agent.train_step()
+            else:
+                b_loss = None
+
+            if s_loss is not None or b_loss is not None:
+                ep_snake_loss += s_loss if s_loss else 0
                 ep_bait_loss  += b_loss if b_loss else 0
                 loss_count    += 1
 
-            ep_snake_reward += snake_reward
+            ep_snake_reward += snake_reward   # Track raw reward for logging
             ep_bait_reward  += bait_reward
 
             snake_obs = snake_obs_next
@@ -295,6 +393,19 @@ def train(config: Config) -> None:
 
             if done:
                 break
+
+        # ── Restore original policies if using historical opponents ────────
+        if using_historical_bait and original_bait_policy is not None:
+            bait_agent.policy_net.load_state_dict(original_bait_policy)
+        if using_historical_snake and original_snake_policy is not None:
+            snake_agent.policy_net.load_state_dict(original_snake_policy)
+
+        # ── Opponent pool: periodically save snapshots ─────────────────────
+        if (coevo.use_opponent_pool and
+                snake_agent.steps_done % coevo.pool_save_interval == 0 and
+                snake_agent.steps_done > 0):
+            snake_opponent_pool.save_snapshot(snake_agent)
+            bait_opponent_pool.save_snapshot(bait_agent)
 
         # ── Post-Episode ──────────────────────────────────────────────────────
         total_games += 1
@@ -304,9 +415,10 @@ def train(config: Config) -> None:
         avg_s_loss = ep_snake_loss / max(loss_count, 1)
         avg_b_loss = ep_bait_loss  / max(loss_count, 1)
 
-        if episode % config.agent.target_sync_interval == 0:
-            snake_agent.sync_target_network()
-            bait_agent.sync_target_network()
+        # NOTE: Hard target sync is REMOVED. Soft update (Polyak τ) happens
+        # inside dqn_agent.train_step() on every gradient step. The old
+        # sync_target_network() method is kept for backward compatibility
+        # but is no longer called by default.
 
         tool_counts = (
             {"snake": snake_tool_counts, "bait": bait_tool_counts}
@@ -335,9 +447,14 @@ def train(config: Config) -> None:
             "bait/loss":            avg_b_loss,
             "snake/epsilon":        snake_agent.epsilon,
             "snake/steps_done":     snake_agent.steps_done,
+            "snake/lr":             snake_agent.optimizer.param_groups[0]["lr"],
             "episode/steps":        step + 1,
             "episode/win_rate_pct": win_rate,
             "episode/winner":       1 if info.get("event") == "capture" else 0,
+            "coevo/using_hist_snake": int(using_historical_snake),
+            "coevo/using_hist_bait":  int(using_historical_bait),
+            "coevo/snake_pool_size":  len(snake_opponent_pool),
+            "coevo/bait_pool_size":   len(bait_opponent_pool),
         }
         # Log tool usage in multi-discrete mode
         if is_multi_discrete:
@@ -350,6 +467,12 @@ def train(config: Config) -> None:
 
         # ── Console progress ──────────────────────────────────────────────────
         if episode % config.training.log_interval == 0:
+            lr_str = f"{snake_agent.optimizer.param_groups[0]['lr']:.2e}"
+            hist_marker = ""
+            if using_historical_snake:
+                hist_marker += " 📦🐍"
+            if using_historical_bait:
+                hist_marker += " 📦🎯"
             print(
                 f"Ep {episode:>7,d} | "
                 f"ε={snake_agent.epsilon:.3f} | "
@@ -357,7 +480,9 @@ def train(config: Config) -> None:
                 f"🎯 R={ep_bait_reward:>7.2f} | "
                 f"Win%={win_rate:>5.1f}% | "
                 f"Steps={step+1:>3d} | "
-                f"Loss={avg_s_loss:.4f}"
+                f"Loss={avg_s_loss:.4f} | "
+                f"LR={lr_str}"
+                f"{hist_marker}"
             )
             if is_multi_discrete:
                 s_top = max(snake_tool_counts, key=snake_tool_counts.get)
@@ -375,11 +500,7 @@ def train(config: Config) -> None:
                 episode       = episode,
                 snake_agent   = snake_agent,
                 bait_agent    = bait_agent,
-                training_meta = {
-                    "log_dir":     log_dir,
-                    "snake_wins":  snake_wins,
-                    "total_games": total_games,
-                },
+                training_meta = _build_training_meta(),
             )
             print(f"  💾 Checkpoint saved → {save_path} (episode {episode:,d})")
             # Log checkpoint milestone to W&B
@@ -393,10 +514,8 @@ def train(config: Config) -> None:
         snake_agent   = snake_agent,
         bait_agent    = bait_agent,
         training_meta = {
-            "log_dir":     log_dir,
-            "snake_wins":  snake_wins,
-            "total_games": total_games,
-            "final":       True,
+            **_build_training_meta(),
+            "final": True,
         },
     )
     snake_agent.save(f"{ckpt_cfg.checkpoint_dir}/snake_final.pt")

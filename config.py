@@ -4,6 +4,12 @@ config.py — Central configuration for the NeuroEvasion project.
 WHY A DATACLASS?
     Dataclasses give us type-checked, documented, immutable configuration.
     Every "magic number" in the project traces back to here.
+
+COEVOLUTIONARY TRAINING NOTES:
+    This configuration has been redesigned for stable coevolutionary
+    training after forensic analysis of 33,500 episodes that revealed
+    catastrophic divergence caused by epsilon collapse, hard target
+    sync shocks, and lack of coevolutionary stabilisers.
 """
 # ──────────────────────────────────────────────────────────────────────────────
 # NOTE ON COLAB H100 USAGE
@@ -44,17 +50,71 @@ class RewardConfig:
 
 @dataclass
 class AgentConfig:
-    """Configuration for the DQN agents."""
-    learning_rate: float = 5e-5          # was 1e-4 — halved to stop loss divergence
+    """
+    Configuration for the DQN agents.
+
+    COEVOLUTIONARY FIXES (v2):
+        - Cyclic epsilon prevents policy crystallisation
+        - Soft target updates (Polyak) replace hard sync
+        - Double DQN fixes Q-value overestimation
+        - Cosine LR schedule with warm restarts
+        - Larger replay buffer and batch for stability
+    """
+    learning_rate: float = 1e-4           # Managed by cosine scheduler
+    lr_min: float = 1e-6                  # Floor for cosine annealing
     gamma: float = 0.99
+
+    # --- Epsilon-greedy exploration ---
     epsilon_start: float = 1.0
-    epsilon_end: float = 0.05            # was 0.01 — matches what Run 2 was using
-    epsilon_decay_steps: int = 1_500_000 # was 100_000 — keeps the Run 2 fix
-    grad_clip: float = 1.0               # was missing — tightens gradient clipping in dqn_agent.py
-    batch_size: int = 64
-    replay_buffer_size: int = 100_000
-    target_sync_interval: int = 1_000
+    epsilon_end: float = 0.05
+    epsilon_decay_steps: int = 500_000    # Faster initial decay...
+    epsilon_cycle: bool = True            # ...but cycles back up!
+    epsilon_cycle_min: float = 0.05       # Cycle floor
+    epsilon_cycle_max: float = 0.30       # Cycle ceiling
+    epsilon_cycle_period: int = 200_000   # Steps per full cosine cycle
+
+    # --- Gradient control ---
+    grad_clip: float = 1.0
+
+    # --- Replay & batching ---
+    batch_size: int = 128                 # Larger = more stable gradients
+    replay_buffer_size: int = 500_000     # 5× larger = more diverse replay
+
+    # --- Target network ---
+    target_update_tau: float = 0.005      # Polyak soft-update coefficient
+    use_soft_target_update: bool = True   # Soft update every train_step()
+    target_sync_interval: int = 1_000     # Fallback if soft update disabled
+
+    # --- Algorithm ---
+    use_double_dqn: bool = True           # Double DQN for Q correction
+
+    # --- Observation ---
     frame_stack: int = 3
+
+
+@dataclass
+class CoevolutionConfig:
+    """
+    Configuration for coevolutionary training stabilisation.
+
+    WHY AN OPPONENT POOL?
+        In coevolution, if agent A only trains against the current
+        version of agent B, both can enter a "Red Queen" cycle where
+        neither actually improves — they just oscillate.  Training
+        against a mix of current + historical opponents prevents this
+        by ensuring the policy generalises across opponent skill levels.
+
+    WHY REWARD NORMALISATION?
+        The reward distribution shifts as agents improve.  A reward of
+        +10 means something very different at episode 100 vs episode
+        100,000.  Running normalisation keeps gradient magnitudes stable.
+    """
+    use_opponent_pool: bool = True
+    pool_size: int = 10                   # Keep 10 historical snapshots
+    pool_save_interval: int = 50_000      # Snapshot every 50k steps
+    pool_current_prob: float = 0.70       # 70% vs current, 30% vs history
+    reward_clip: float = 15.0             # Hard clip rewards to ±15
+    reward_normalize: bool = True         # Running mean/std normalisation
 
 
 @dataclass
@@ -130,4 +190,5 @@ class Config:
     training:       TrainingConfig       = field(default_factory=TrainingConfig)
     checkpoint:     CheckpointConfig     = field(default_factory=CheckpointConfig)
     multi_discrete: MultiDiscreteConfig  = field(default_factory=MultiDiscreteConfig)
+    coevolution:    CoevolutionConfig     = field(default_factory=CoevolutionConfig)
     seed:           int                  = 42

@@ -8,18 +8,33 @@ This class ties everything together:
     - Trains the network using TD-learning
     - Maintains a target network for stable training
 
+COEVOLUTIONARY FIXES (v2):
+    - Double DQN: policy net selects action, target net evaluates.
+      Prevents the systematic Q-value overestimation that caused
+      the catastrophic divergence from episode ~25,000 onwards.
+    - Polyak soft target update (τ=0.005): smooth tracking replaces
+      hard copy every 1,000 episodes, eliminating "target shock".
+    - Cyclic epsilon: cosine-cycled exploration re-injects diversity
+      after the initial linear decay, preventing policy crystallisation
+      against a non-stationary coevolutionary opponent.
+    - Cosine-annealing LR with warm restarts: adapts learning rate
+      to the training phase instead of a fixed value forever.
+
 THE TRAINING ALGORITHM (pseudocode):
     1. Observe state s
     2. With probability ε: random action, else: argmax Q(s, a)
     3. Execute action, observe reward r and next state s'
     4. Store (s, a, r, s', done) in replay buffer
     5. Sample random batch from buffer
-    6. Compute target: y = r + γ × max Q_target(s', a')
-    7. Compute loss: L = Huber(Q(s, a) - y)   ← Huber, not MSE
+    6. Double DQN target:
+         a* = argmax_a Q_policy(s', a)    ← policy selects
+         y  = r + γ × Q_target(s', a*)    ← target evaluates
+    7. Compute loss: L = Huber(Q(s, a) - y)
     8. Backpropagate and update weights
-    9. Periodically copy weights to target network
+    9. Soft-update target network (Polyak τ=0.005)
 """
 
+import math
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -60,6 +75,14 @@ class DQNAgent:
         # --- Optimizer ---
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=config.learning_rate)
 
+        # --- LR Scheduler (cosine annealing with warm restarts) ---
+        self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            self.optimizer,
+            T_0=100_000,           # First restart after 100k steps
+            T_mult=2,              # Double the period after each restart
+            eta_min=config.lr_min,
+        )
+
         # --- Replay Buffer ---
         self.memory = ReplayBuffer(capacity=config.replay_buffer_size)
 
@@ -80,6 +103,12 @@ class DQNAgent:
             Early in training, the network's Q-values are random noise.
             We need exploration to discover which actions lead to rewards.
             As training progresses, we trust the network more (lower ε).
+
+        WHY CYCLIC ε?
+            In coevolutionary training, the opponent keeps changing.
+            A fixed-floor ε means the agent stops exploring exactly when
+            it needs to adapt most. Cycling ε back up periodically
+            re-injects exploration and prevents policy crystallisation.
         """
         self.steps_done += 1
         self._update_epsilon()
@@ -95,9 +124,33 @@ class DQNAgent:
                 return q_values.argmax(dim=1).item()
 
     def _update_epsilon(self) -> None:
-        """Linearly decay ε from start to end over decay_steps."""
+        """
+        Update ε with initial linear decay → cosine cycling.
+
+        Phase 1 (steps < decay_steps):
+            Linear decay from epsilon_start → epsilon_end.
+
+        Phase 2 (steps >= decay_steps, if epsilon_cycle enabled):
+            Cosine cycling between epsilon_cycle_min and epsilon_cycle_max.
+            This ensures the agent never fully commits to exploitation,
+            which is critical in coevolutionary settings.
+        """
         progress = min(1.0, self.steps_done / self.epsilon_decay_steps)
-        self.epsilon = self.epsilon_start + progress * (self.epsilon_end - self.epsilon_start)
+        base = self.epsilon_start + progress * (self.epsilon_end - self.epsilon_start)
+
+        if (hasattr(self.config, 'epsilon_cycle') and
+                self.config.epsilon_cycle and progress >= 1.0):
+            # Phase 2: Cosine cycling
+            excess_steps = self.steps_done - self.epsilon_decay_steps
+            period = getattr(self.config, 'epsilon_cycle_period', 200_000)
+            cycle_min = getattr(self.config, 'epsilon_cycle_min', 0.05)
+            cycle_max = getattr(self.config, 'epsilon_cycle_max', 0.30)
+
+            cycle_progress = excess_steps / period
+            cosine = 0.5 * (1.0 + math.cos(math.pi * cycle_progress))
+            base = cycle_min + cosine * (cycle_max - cycle_min)
+
+        self.epsilon = base
 
     def store_transition(self, state, action, reward, next_state, done) -> None:
         """Save an experience to replay memory."""
@@ -107,9 +160,18 @@ class DQNAgent:
         """
         Perform one training step (sample batch + gradient update).
 
-        THE CORE DQN UPDATE:
-            target = reward + γ × max_a' Q_target(next_state, a')
-            loss   = Huber(Q_policy(state, action), target)
+        DOUBLE DQN UPDATE (fixes Q-value overestimation):
+            1. Policy net selects the best next action:
+                   a* = argmax_a Q_policy(s', a)
+            2. Target net evaluates that action:
+                   Q_target_val = Q_target(s', a*)
+            3. TD target:
+                   y = r + γ × Q_target_val × (1 - done)
+
+            Standard DQN uses max Q_target(s', ·) for BOTH selection and
+            evaluation, which systematically overestimates Q-values. The
+            overestimates compound through bootstrapping, eventually causing
+            the divergence we observed from episode ~25,000 onwards.
 
         WHY HUBER LOSS (smooth_l1_loss)?
             MSE squares large errors, which causes exploding gradients when
@@ -117,11 +179,6 @@ class DQNAgent:
             where the opponent keeps shifting the reward landscape).
             Huber is quadratic for small errors (precise) and linear for large
             ones (robust) — it stops runaway loss spikes dead.
-
-        WHY max_norm=grad_clip (1.0 vs old 10.0)?
-            max_norm=10.0 is so loose it never actually clips anything.
-            max_norm=1.0 hard-caps the gradient vector length, preventing
-            a single bad batch from taking a catastrophically large step.
 
         Returns:
             loss value (float) or None if buffer isn't ready
@@ -142,45 +199,81 @@ class DQNAgent:
         # Q(s, a) for the actions we actually took
         current_q = self.policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
 
-        # --- Target Q-values ---
+        # --- Target Q-values (Double DQN) ---
         with torch.no_grad():
-            # max_a' Q_target(s', a')
-            next_q = self.target_net(next_states).max(dim=1)[0]
+            use_double = getattr(self.config, 'use_double_dqn', True)
+            if use_double:
+                # Double DQN: policy net SELECTS, target net EVALUATES
+                best_actions = self.policy_net(next_states).argmax(dim=1)
+                next_q = self.target_net(next_states).gather(
+                    1, best_actions.unsqueeze(1)
+                ).squeeze(1)
+            else:
+                # Vanilla DQN fallback
+                next_q = self.target_net(next_states).max(dim=1)[0]
+
             # If episode is done, there is no next state value
             target_q = rewards + self.config.gamma * next_q * (1 - dones)
 
         # --- Compute Huber loss ---
-        # FIX 1: smooth_l1_loss = true Huber loss.
-        # Previous mse_loss was squaring large TD errors, amplifying
-        # the Q-value divergence visible from episode 25,000 onwards.
         loss = nn.functional.smooth_l1_loss(current_q, target_q)
 
         # --- Backprop ---
         self.optimizer.zero_grad()
         loss.backward()
 
-        # FIX 2: tightened gradient clip from max_norm=10.0 → config.grad_clip (1.0).
-        # The old value of 10.0 was so permissive it never triggered.
-        # 1.0 hard-caps the gradient vector norm on every step, stopping
-        # the loss spiral that appeared once epsilon hit its floor at ep 21,700.
+        # Gradient clipping (max_norm=1.0)
         nn.utils.clip_grad_norm_(self.policy_net.parameters(),
                                  max_norm=self.config.grad_clip)
 
         self.optimizer.step()
 
+        # Step the LR scheduler
+        self.scheduler.step()
+
+        # --- Soft target update (Polyak averaging) ---
+        if getattr(self.config, 'use_soft_target_update', True):
+            self.soft_update_target()
+
         return loss.item()
+
+    def soft_update_target(self, tau: float | None = None) -> None:
+        """
+        Polyak-average target network towards policy network.
+
+        θ_target ← τ × θ_policy + (1 − τ) × θ_target
+
+        WHY SOFT UPDATES?
+            Hard copy (every N episodes) creates "target shock" — the
+            target Q-values jump discontinuously, destabilising all
+            TD-error computations for subsequent batches.
+
+            Soft update moves the target a tiny bit (τ=0.005 = 0.5%)
+            towards the policy on EVERY training step. This gives the
+            target network the stability of a slow-moving reference
+            while still tracking the policy's improvements.
+
+        This is the method used by DDPG, TD3, SAC, and other modern
+        deep RL algorithms.
+
+        Args:
+            tau: Override for the soft-update coefficient.
+                 Defaults to config.target_update_tau.
+        """
+        if tau is None:
+            tau = getattr(self.config, 'target_update_tau', 0.005)
+        for target_param, policy_param in zip(
+                self.target_net.parameters(), self.policy_net.parameters()):
+            target_param.data.copy_(
+                tau * policy_param.data + (1.0 - tau) * target_param.data
+            )
 
     def sync_target_network(self) -> None:
         """
-        Copy policy network weights to target network.
+        Hard-copy policy network weights to target network.
 
-        WHY A SEPARATE TARGET NETWORK?
-            If we used the same network for both Q(s,a) and the target,
-            we'd be chasing a moving target — the network updates change
-            the target values, creating instability.
-
-            The target network provides a STABLE reference point.
-            We update it periodically (every ~1000 episodes).
+        DEPRECATED for coevolutionary training — use soft_update_target().
+        Kept for backward compatibility and non-coevolutionary settings.
         """
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
@@ -194,6 +287,7 @@ class DQNAgent:
             policy_net      — the network being trained
             target_net      — the stable reference network
             optimizer       — Adam state (step counts, momentum buffers)
+            scheduler       — LR scheduler state
             epsilon         — current exploration rate
             steps_done      — total environment steps taken (drives ε-decay)
 
@@ -209,6 +303,7 @@ class DQNAgent:
         }
         if include_optimizer:
             state["optimizer"] = self.optimizer.state_dict()
+            state["scheduler"] = self.scheduler.state_dict()
         return state
 
     def load_full_state(self, state: dict) -> None:
@@ -229,6 +324,8 @@ class DQNAgent:
         self.steps_done = state["steps_done"]
         if "optimizer" in state:
             self.optimizer.load_state_dict(state["optimizer"])
+        if "scheduler" in state:
+            self.scheduler.load_state_dict(state["scheduler"])
 
     # ─── Backward-compatible thin wrappers ───────────────────────────────────
 
