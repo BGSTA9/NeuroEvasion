@@ -50,7 +50,7 @@ class AgentConfig:
     epsilon_start: float = 1.0
     epsilon_end: float = 0.05            # was 0.01 — matches what Run 2 was using
     epsilon_decay_steps: int = 1_500_000 # was 100_000 — keeps the Run 2 fix
-    grad_clip: float = 1.0               # ADD THIS LINE — used by dqn_agent.py
+    grad_clip: float = 1.0               # was missing — tightens gradient clipping in dqn_agent.py
     batch_size: int = 64
     replay_buffer_size: int = 100_000
     target_sync_interval: int = 1_000
@@ -81,7 +81,7 @@ class CheckpointConfig:
     keep_last_n: int = 5              # Keep 5 rolling checkpoints on disk
     save_optimizer: bool = True       # Essential for exact resume
     atomic_write: bool = True         # Crash-safe writes
-    drive_sync_dir: str = ""         # Mount path for Google Drive sync
+    drive_sync_dir: str = ""          # Mount path for Google Drive sync
 
 
 @dataclass
@@ -93,7 +93,7 @@ class TrainingConfig:
     eval_interval: int = 5_000
     eval_episodes: int = 100
     opponent_swap_interval: int = 50_000  # For self-play variant
-    device: str = "cpu"              # "cuda" if GPU available
+    device: str = "cpu"               # "cuda" if GPU available
 
 
 @dataclass
