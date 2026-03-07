@@ -290,7 +290,9 @@ def train(config: Config) -> None:
 
     signal.signal(signal.SIGTERM, _emergency_save)
     signal.signal(signal.SIGINT,  _emergency_save)
-
+    
+    _last_log_time = time.time()
+    
     # ─────────────────────────────────────────────────────────────────────────
     #  Training loop
     # ─────────────────────────────────────────────────────────────────────────
