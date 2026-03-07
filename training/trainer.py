@@ -310,12 +310,17 @@ def train(config: Config) -> None:
                 
             new_lr = wandb.config.get("learning_rate")
             current_lr = snake_agent.optimizer.param_groups[0]["lr"]
-            if new_lr and abs(new_lr - current_lr) / current_lr > 0.01:  # only act on >1% change
+            # only act on >1% change to avoid floating point spam
+            if new_lr and abs(new_lr - current_lr) / (current_lr + 1e-8) > 0.01:
                 print(f"\n📉 Remote Control: Changing learning rate to {new_lr:.2e}")
                 for param_group in snake_agent.optimizer.param_groups:
                     param_group['lr'] = new_lr
                 for param_group in bait_agent.optimizer.param_groups:
                     param_group['lr'] = new_lr
+                
+                # Update the W&B config reference so we don't spam if current_lr decays
+                # by >1% due to the cosine scheduler in subsequent steps!
+                wandb.config.update({"learning_rate": new_lr}, allow_val_change=True)
                     
         # 2. Check for physical STOP_TRAINING.txt block in Drive
         if ckpt_cfg.drive_sync_dir:
