@@ -292,6 +292,7 @@ def train(config: Config) -> None:
     signal.signal(signal.SIGINT,  _emergency_save)
     
     _last_log_time = time.time()
+    _last_remote_lr = None
     
     # ─────────────────────────────────────────────────────────────────────────
     #  Training loop
@@ -309,18 +310,23 @@ def train(config: Config) -> None:
                 manual_stop_triggered = True
                 
             new_lr = wandb.config.get("learning_rate")
-            current_lr = snake_agent.optimizer.param_groups[0]["lr"]
-            # only act on >1% change to avoid floating point spam
-            if new_lr and abs(new_lr - current_lr) / (current_lr + 1e-8) > 0.01:
-                print(f"\n📉 Remote Control: Changing learning rate to {new_lr:.2e}")
-                for param_group in snake_agent.optimizer.param_groups:
-                    param_group['lr'] = new_lr
-                for param_group in bait_agent.optimizer.param_groups:
-                    param_group['lr'] = new_lr
+            if new_lr is not None and new_lr != _last_remote_lr:
+                current_lr = snake_agent.optimizer.param_groups[0]["lr"]
                 
-                # Update the W&B config reference so we don't spam if current_lr decays
-                # by >1% due to the cosine scheduler in subsequent steps!
-                wandb.config.update({"learning_rate": new_lr}, allow_val_change=True)
+                # If this is the first check (_last_remote_lr is None), only print if it's actually different from train start
+                if _last_remote_lr is not None or abs(new_lr - current_lr) / (current_lr + 1e-8) > 0.01:
+                    print(f"\n📉 Remote Control: Changing learning rate to {new_lr:.2e}")
+                
+                for agent in (snake_agent, bait_agent):
+                    for param_group in agent.optimizer.param_groups:
+                        param_group['lr'] = new_lr
+                    
+                    # Update PyTorch scheduler so it decays from the NEW learning rate,
+                    # instead of instantly reverting the LR back to the old value next step!
+                    if hasattr(agent, 'scheduler') and hasattr(agent.scheduler, 'base_lrs'):
+                        agent.scheduler.base_lrs = [new_lr for _ in agent.scheduler.base_lrs]
+                
+                _last_remote_lr = new_lr
                     
         # 2. Check for physical STOP_TRAINING.txt block in Drive
         if ckpt_cfg.drive_sync_dir:
