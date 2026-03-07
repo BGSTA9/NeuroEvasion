@@ -307,7 +307,8 @@ def train(config: Config) -> None:
                 manual_stop_triggered = True
                 
             new_lr = wandb.config.get("learning_rate")
-            if new_lr and new_lr != snake_agent.optimizer.param_groups[0]["lr"]:
+            current_lr = snake_agent.optimizer.param_groups[0]["lr"]
+            if new_lr and abs(new_lr - current_lr) / current_lr > 0.01:  # only act on >1% change
                 print(f"\\n📉 Remote Control: Changing learning rate to {new_lr:.2e}")
                 for param_group in snake_agent.optimizer.param_groups:
                     param_group['lr'] = new_lr
