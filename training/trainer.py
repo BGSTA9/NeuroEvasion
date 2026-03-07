@@ -514,12 +514,19 @@ def train(config: Config) -> None:
 
         # ── Console progress ──────────────────────────────────────────────────
         if episode % config.training.log_interval == 0:
+            now            = time.time()
+            elapsed        = now - _last_log_time
+            _last_log_time = now
+            mins, secs     = divmod(int(elapsed), 60)
+            time_str       = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
+
             lr_str = f"{snake_agent.optimizer.param_groups[0]['lr']:.2e}"
             hist_marker = ""
             if using_historical_snake:
                 hist_marker += " 📦🐍"
             if using_historical_bait:
                 hist_marker += " 📦🎯"
+            print(f"  ⏱  +{time_str}")
             print(
                 f"Ep {episode:>7,d} | "
                 f"ε={snake_agent.epsilon:.3f} | "
