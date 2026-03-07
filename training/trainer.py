@@ -305,13 +305,13 @@ def train(config: Config) -> None:
         # 1. Check W&B config overrides for manual stop and LR
         if _WANDB_AVAILABLE:
             if wandb.config.get("manual_stop", False):
-                print(f"\\n🛑 Manual Stop Triggered via W&B at episode {episode:,}!")
+                print(f"\n🛑 Manual Stop Triggered via W&B at episode {episode:,}!")
                 manual_stop_triggered = True
                 
             new_lr = wandb.config.get("learning_rate")
             current_lr = snake_agent.optimizer.param_groups[0]["lr"]
             if new_lr and abs(new_lr - current_lr) / current_lr > 0.01:  # only act on >1% change
-                print(f"\\n📉 Remote Control: Changing learning rate to {new_lr:.2e}")
+                print(f"\n📉 Remote Control: Changing learning rate to {new_lr:.2e}")
                 for param_group in snake_agent.optimizer.param_groups:
                     param_group['lr'] = new_lr
                 for param_group in bait_agent.optimizer.param_groups:
