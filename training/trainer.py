@@ -297,6 +297,40 @@ def train(config: Config) -> None:
     for episode in range(start_episode, config.training.num_episodes + 1):
         _state["current_episode"] = episode
 
+        # ── Remote Control & Emergency Stop ───────────────────────────────────
+        manual_stop_triggered = False
+        
+        # 1. Check W&B config overrides for manual stop and LR
+        if _WANDB_AVAILABLE:
+            if wandb.config.get("manual_stop", False):
+                print(f"\\n🛑 Manual Stop Triggered via W&B at episode {episode:,}!")
+                manual_stop_triggered = True
+                
+            new_lr = wandb.config.get("learning_rate")
+            if new_lr and new_lr != snake_agent.optimizer.param_groups[0]["lr"]:
+                print(f"\\n📉 Remote Control: Changing learning rate to {new_lr:.2e}")
+                for param_group in snake_agent.optimizer.param_groups:
+                    param_group['lr'] = new_lr
+                for param_group in bait_agent.optimizer.param_groups:
+                    param_group['lr'] = new_lr
+                    
+        # 2. Check for physical STOP_TRAINING.txt block in Drive
+        if ckpt_cfg.drive_sync_dir:
+            stop_file = os.path.join(ckpt_cfg.drive_sync_dir, "STOP_TRAINING.txt")
+            if os.path.exists(stop_file):
+                print(f"\\n🛑 Manual Stop Triggered via STOP_TRAINING.txt at episode {episode:,}!")
+                manual_stop_triggered = True
+                
+        if manual_stop_triggered:
+            save_path = manager.save(
+                episode=episode,
+                snake_agent=snake_agent,
+                bait_agent=bait_agent,
+                training_meta=_build_training_meta(),
+            )
+            print(f"  💾 Emergency final checkpoint saved → {save_path}")
+            break
+
         snake_obs, bait_obs = env.reset()
         ep_snake_reward = 0.0
         ep_bait_reward  = 0.0
@@ -462,6 +496,18 @@ def train(config: Config) -> None:
                 wandb_metrics[f"snake/tool_{tool_name}"] = count
             for tool_name, count in bait_tool_counts.items():
                 wandb_metrics[f"bait/tool_{tool_name}"] = count
+
+        # ── Live Visual Telemetry (Every 1000 Episodes) ───────────────────────
+        if episode % 1000 == 0 and _WANDB_AVAILABLE:
+            try:
+                # Get frames (H, W, 3) arrays
+                frames = env.record_eval_episode(snake_agent, bait_agent)
+                # wandb.Video expects (time, channel, height, width)
+                # so we transpose (H, W, C) -> (C, H, W) for each frame
+                vid_frames = np.array([np.transpose(f, (2, 0, 1)) for f in frames])
+                wandb_metrics["live_observation"] = wandb.Video(vid_frames, fps=10, format="gif")
+            except Exception as e:
+                log.warning(f"Failed to record live telemetry video: {e}")
 
         _wandb_log(wandb_metrics)
 

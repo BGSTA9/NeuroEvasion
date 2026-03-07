@@ -14,6 +14,8 @@ MULTI-DISCRETE EXTENSION:
 THE GYM API PATTERN:
     env.reset()  → observations
     env.step(actions) → observations, rewards, done, info
+    env.render() → (H, W, 3) uint8 numpy array (RGB image for video logging)
+    env.record_eval_episode(snake, bait) → list of frames (numpy arrays)
 
     This is the standard interface used across the RL community
     (OpenAI Gym, Gymnasium, DeepMind Lab, etc.). Learning this
@@ -134,3 +136,78 @@ class NeuroEvasionEnv:
         bait_stacked  = self.bait_stacker.push(bait_obs)
 
         return snake_stacked, bait_stacked, snake_reward, bait_reward, done, info
+
+    def render(self, cell_size: int = 16) -> np.ndarray:
+        """
+        Render the current game state as an RGB numpy array.
+        This runs completely headless (no Pygame required), perfect for Colab.
+        
+        Args:
+            cell_size: Size of each grid cell in pixels.
+            
+        Returns:
+            A (H, W, 3) uint8 numpy array image.
+        """
+        h = self.config.game.grid_size * cell_size
+        w = self.config.game.grid_size * cell_size
+        img = np.zeros((h, w, 3), dtype=np.uint8)
+        
+        # Colors (RGB)
+        C_WALL  = (40, 44, 52)
+        C_EMPTY = (15, 17, 26)
+        C_SNAKE = (97, 175, 239)
+        C_HEAD  = (86, 182, 194)
+        C_BAIT  = (224, 108, 117)
+
+        grid = self.engine.grid.cells
+        
+        for r in range(self.config.game.grid_size):
+            for c in range(self.config.game.grid_size):
+                val = grid[r, c]
+                y1, y2 = r * cell_size, (r + 1) * cell_size
+                x1, x2 = c * cell_size, (c + 1) * cell_size
+                
+                if val == 1:   # Wall
+                    img[y1:y2, x1:x2] = C_WALL
+                elif val == 2: # Snake Body
+                    img[y1:y2, x1:x2] = C_SNAKE
+                elif val == 3: # Snake Head
+                    img[y1:y2, x1:x2] = C_HEAD
+                elif val == 4: # Bait
+                    img[y1:y2, x1:x2] = C_BAIT
+                else:          # Empty / Unknown
+                    img[y1:y2, x1:x2] = C_EMPTY
+                    
+        return img
+
+    def record_eval_episode(self, snake_agent, bait_agent, max_steps: int = 200, cell_size: int = 16) -> list[np.ndarray]:
+        """
+        Run one greedy (epsilon=0) episode and record the frames.
+        
+        Returns:
+            List of (H, W, 3) uint8 numpy array frames for video generation.
+        """
+        s_obs, b_obs = self.reset()
+        frames = [self.render(cell_size)]
+        
+        # Temporarily force greedy actions
+        s_eps_bak = snake_agent.epsilon
+        b_eps_bak = bait_agent.epsilon
+        snake_agent.epsilon = 0.0
+        bait_agent.epsilon = 0.0
+        
+        for _ in range(max_steps):
+            s_act = snake_agent.select_action(s_obs)
+            b_act = bait_agent.select_action(b_obs)
+            
+            s_obs, b_obs, _, _, done, _ = self.step(s_act, b_act)
+            frames.append(self.render(cell_size))
+            
+            if done:
+                break
+                
+        # Restore exploration rates
+        snake_agent.epsilon = s_eps_bak
+        bait_agent.epsilon = b_eps_bak
+        
+        return frames
